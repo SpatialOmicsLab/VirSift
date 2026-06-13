@@ -1213,6 +1213,12 @@ if action_logs:
         _log_df = _log_df.fillna("-")
         st.dataframe(_log_df, use_container_width=True, hide_index=True)
 
+# ── Sequence-record interpretation disclaimer ────────────────────────────────
+# The landing/home mode exits earlier with st.stop(), so this appears only
+# after a dataset has been activated and the Observatory is being displayed.
+st.divider()
+st.caption(T("footer_sequence_disclaimer"))
+
 # ── Inter-page navigation ─────────────────────────────────────────────────────
 st.divider()
 _nav1, _nav2 = st.columns(2)

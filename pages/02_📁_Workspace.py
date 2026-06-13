@@ -46,6 +46,9 @@ uploaded_files = st.file_uploader(
     label_visibility="collapsed",
 )
 
+# Explain where uploaded files are processed in local and hosted deployments.
+st.caption(T("footer_hosting_disclaimer"))
+
 # --- Parse any newly uploaded files ---
 if uploaded_files:
     existing_names = {rf["name"] for rf in st.session_state.get("raw_files", [])}
