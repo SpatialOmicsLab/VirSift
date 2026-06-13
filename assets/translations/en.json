@@ -1,7 +1,7 @@
 {
-  "_comment": "Vir-Seq-Sift v1.0 — English Translations",
+  "_comment": "VirSift v1.0 — English Translations",
   "_note": "Starter set for Phase 0 scaffold. Full extraction from fasta_analysis_app_final.py TRANSLATIONS['en'] is Step 3.",
-  "app_title": "Vir-Seq-Sift",
+  "app_title": "VirSift",
   "app_subtitle": "Performance-First Surveillance",
   "app_version": "v1.0",
   "sidebar_language": "Language",
@@ -185,7 +185,7 @@
   "obs_clade_dist": "Clade Distribution (Level 1)",
   "obs_action_log_header": "Session Action Log",
   "welcome_tagline": "The next-generation platform for FASTA-based viral surveillance at genomic scale",
-  "welcome_title": "Welcome to Vir-Seq-Sift",
+  "welcome_title": "Welcome to VirSift",
   "welcome_message": "Upload your GISAID FASTA exports and instantly unlock epidemic curve analysis, phylogenetic sub-sampling, multi-dimensional filtering, and one-click export bundles — all without leaving your browser.",
   "welcome_formats": "Supported: .fasta · .fa · .fasta.gz · .txt · .zip · .aln-fasta (max 50,000 sequences per session)",
   "welcome_how_title": "How it Works",
