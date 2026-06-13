@@ -729,7 +729,7 @@ with tab_uc:
     # Download documentation as Markdown (combined guide + feature reference)
     st.divider()
     _doc_bundle = (
-        f"# VirSift v1.0 — {T('docs_page_header')}\n\n"
+        f"# VirSift v1.0.0 — {T('docs_page_header')}\n\n"
         f"## {T('docs_tab_quickstart')}\n\n{_QUICKSTART.get(_lang, _QUICKSTART['en'])}\n\n"
         f"## {T('docs_tab_features')}\n\n{_FEATURE_TABLE.get(_lang, _FEATURE_TABLE['en'])}\n\n"
         f"## {T('docs_tab_tips')}\n\n{_TIPS_FAQ.get(_lang, _TIPS_FAQ['en'])}\n\n"
