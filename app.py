@@ -646,13 +646,14 @@ def _render_sidebar() -> None:
                 _n_src = len(_last_act.get("files", []))
                 if _n_src > 1:
                     st.caption(
-                        f"📦 **{_n_src} source files** merged — "
-                        f"use 🧬 Timeline to analyse each file separately"
+                        T(
+                            "sidebar_sources_merged",
+                            count=_n_src,
+                            timeline=T("nav_timeline"),
+                        )
                     )
                 else:
-                    st.caption(
-                        f"📦 1 source file in dataset"
-                    )
+                    st.caption(T("sidebar_one_source"))
             if len(_active_df) > 10_000:
                 st.warning(T("sidebar_large_dataset_warning"))
         else:
