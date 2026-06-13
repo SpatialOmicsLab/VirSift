@@ -22,7 +22,7 @@ Performance target: 10K sequences in < 5 seconds.
 
 # Increment whenever host-inference, location-extraction, or field-order
 # detection logic changes — forces @st.cache_data to reparse all files.
-_PARSER_VERSION = "v3d.4"
+_PARSER_VERSION = "v1.0"
 
 import gzip
 import hashlib
