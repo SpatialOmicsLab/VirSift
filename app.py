@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-app.py — Vir-Seq-Sift v2.1
+app.py — VirSift v1.0.0
 Multilingual entry point + minimal sidebar + st.navigation() wiring.
 
 This file is the ONLY place that:
@@ -29,14 +29,14 @@ except Exception:
     _page_icon = "🧬"
 
 st.set_page_config(
-    page_title="Vir-Seq-Sift",
+    page_title="VirSift",
     page_icon=_page_icon,
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
         "Get Help": None,
         "Report a bug": None,
-        "About": "Vir-Seq-Sift v2.1 — Zero-Lag Epidemiological Surveillance",
+        "About": "VirSift v1.0.0 — Zero-Lag Epidemiological Surveillance",
     },
 )
 
