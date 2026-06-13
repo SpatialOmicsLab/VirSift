@@ -1,7 +1,7 @@
 {
-  "_comment": "Vir-Seq-Sift v1.0 — Russian Translations",
+  "_comment": "VirSift v1.0 — Russian Translations",
   "_note": "Terminology aligned with Rospotrebnadzor standards. NOT machine-translated. Full extraction from fasta_analysis_app_final.py TRANSLATIONS['ru'] is Step 3.",
-  "app_title": "Vir-Seq-Sift",
+  "app_title": "VirSift",
   "app_subtitle": "Высокопроизводительный мониторинг",
   "app_version": "v1.0",
   "sidebar_language": "Язык",
@@ -185,7 +185,7 @@
   "obs_clade_dist": "Распределение по кладам (уровень 1)",
   "obs_action_log_header": "Журнал действий сессии",
   "welcome_tagline": "Платформа нового поколения для FASTA-геномного надзора в вирусологии",
-  "welcome_title": "Добро пожаловать в Vir-Seq-Sift",
+  "welcome_title": "Добро пожаловать в VirSift",
   "welcome_message": "Загрузите экспорты GISAID FASTA и мгновенно получите анализ эпидемических кривых, филогенетическую субвыборку, многомерную фильтрацию и одним нажатием — пакеты экспорта, всё без выхода из браузера.",
   "welcome_formats": "Поддерживаются: .fasta · .fa · .fasta.gz · .txt · .zip · .aln-fasta (макс. 50 000 последовательностей за сессию)",
   "welcome_how_title": "Как это работает",
