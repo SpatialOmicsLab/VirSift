@@ -1,0 +1,43 @@
+cff-version: 1.2.0
+message: "If you use VirSift in research, surveillance, teaching, or publications, please cite it using these metadata."
+type: software
+title: "VirSift: A Structured, Multilingual, Browser-Based Workflow for Pre-Phylogenetic Curation and Epidemiological Visualization of GISAID and NCBI/GenBank Influenza Sequence Datasets"
+version: "1.0.0"
+authors:
+  - family-names: "Alabetutu"
+    given-names: "Ayanfeoluwa"
+    orcid: "https://orcid.org/0000-0002-0173-8395"
+    affiliation: "Research Institute of Virology, FRC FTM, Novosibirsk; UREKA Biotec / OmicsLogic Africa, Ibadan"
+  - family-names: "Sobolev"
+    given-names: "Ivan A."
+    orcid: "https://orcid.org/0000-0002-4561-6517"
+    affiliation: "Research Institute of Virology, FRC FTM, Novosibirsk"
+  - family-names: "Adeluwoye"
+    given-names: "Adekunle O."
+    orcid: "https://orcid.org/0000-0003-0351-3365"
+    affiliation: "UREKA Biotec / OmicsLogic Africa, Ibadan; KolaDaisi University, Ibadan"
+  - family-names: "Shestopalov"
+    given-names: "Alexander M."
+    affiliation: "Research Institute of Virology, FRC FTM, Novosibirsk"
+contact:
+  family-names: "Alabetutu"
+  given-names: "Ayanfeoluwa"
+  email: "ayanfe4luv@gmail.com"
+repository-code: "https://github.com/SpatialOmicsLab/virsift"
+url: "https://virsift.streamlit.app/"
+license: "MIT"
+keywords:
+  - "bioinformatics"
+  - "viral genomics"
+  - "influenza"
+  - "genomic surveillance"
+  - "FASTA"
+  - "Streamlit"
+  - "epidemiology"
+  - "data curation"
+abstract: >-
+  VirSift is a multilingual, browser-based Streamlit workflow for
+  pre-phylogenetic curation, human-in-the-loop temporal sampling,
+  epidemiological visualization, and molecular persistence analysis
+  of viral FASTA datasets, with specialized support for GISAID and
+  NCBI influenza sequence metadata.
