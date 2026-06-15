@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use VirSift in research, surveillance, teaching, or publications, please cite it using these metadata."
 type: software
-title: "VirSift: A Structured, Multilingual, Browser-Based Workflow for Pre-Phylogenetic Curation and Epidemiological Visualization of Viral Sequence Datasets"
+title: "VirSift: Viral Sequence Intelligence and Filtering Toolkit"
 version: "1.0.0"
 date-released: "2026-06-15"
 
@@ -56,6 +56,6 @@ abstract: >-
   pre-phylogenetic curation, human-in-the-loop temporal sampling,
   epidemiological visualization, and molecular persistence analysis
   of viral FASTA datasets from human and non-human animal hosts. 
-  It supports workflows for influenza A, B,  C, and D, human respiratory
-  syncytial virus (hRSV), SARS-CoV-2, and other viral datasets with 
-  compatible FASTA headers and metadata.
+  It supports workflows for influenza A, B, C, and D; respiratory
+  syncytial virus (RSV) from human and animal hosts; SARS-CoV-2; and
+  other viral datasets with compatible FASTA headers and metadata.
