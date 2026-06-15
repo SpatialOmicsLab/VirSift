@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use VirSift in research, surveillance, teaching, or publications, please cite it using these metadata."
 type: software
-title: "VirSift: A Structured, Multilingual, Browser-Based Workflow for Pre-Phylogenetic Curation and Epidemiological Visualization of GISAID and NCBI/GenBank Influenza Sequence Datasets"
+title: "VirSift: A Structured, Multilingual, Browser-Based Workflow for Pre-Phylogenetic Curation and Epidemiological Visualization of Viral Sequence Datasets"
 version: "1.0.0"
 date-released: "2026-06-14"
 
@@ -37,17 +37,25 @@ license: "MIT"
 keywords:
   - "bioinformatics"
   - "viral genomics"
-  - "influenza"
+  - "viral FASTA"
+  - "influenza A"
+  - "influenza B"
+  - "influenza C"
+  - "influenza D"
+  - "hRSV"
+  - "SARS-CoV-2"
   - "genomic surveillance"
-  - "FASTA"
+  - "pre-phylogenetic curation"
+  - "human-in-the-loop sampling"
+  - "molecular persistence"
   - "Streamlit"
-  - "epidemiology"
   - "data curation"
 
 abstract: >-
   VirSift is a multilingual, browser-based Streamlit workflow for
   pre-phylogenetic curation, human-in-the-loop temporal sampling,
   epidemiological visualization, and molecular persistence analysis
-  of viral FASTA datasets, with specialized support for GISAID and
-  NCBI/GenBank influenza sequence metadata.
-```
+  of viral FASTA datasets from human and non-human animal hosts. 
+  It supports workflows for influenza A, B,  C, and D, human respiratory
+  syncytial virus (hRSV), SARS-CoV-2, and other viral datasets with 
+  compatible FASTA headers and metadata.
