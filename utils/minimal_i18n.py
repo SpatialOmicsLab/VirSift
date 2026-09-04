@@ -26,6 +26,36 @@ import json
 import os
 import streamlit as st
 
+# Known key-namespace prefixes, longest/most-specific first (auto-sorted by
+# length below) — stripped before humanizing so the last-resort fallback
+# reads "Month" or "Inferno" rather than "Analytics Field Month" or
+# "Obs Palette Inferno". Purely cosmetic: matching a prefix here is not
+# required for correctness, just for a cleaner worst-case display.
+_KEY_PREFIXES = tuple(sorted([
+    "analytics_field_", "obs_palette_", "obs_col_",
+    "filter_field_", "filter_op_", "hitl_strategy_",
+    "host_tier_label_", "host_tier_body_", "workspace_top_",
+    "analytics_", "obs_", "filter_", "hitl_", "header_converter_",
+    "host_tier_", "workspace_", "etdf_", "footer_", "sidebar_",
+    "timeline_", "export_", "upload_", "nav_", "docs_",
+], key=len, reverse=True))
+
+
+def _humanize_key(key: str) -> str:
+    """Turn a raw translation key into a readable last-resort label.
+
+    Never used when a real translation exists in any loaded catalogue —
+    only when a key is missing everywhere (e.g. a stale deployment whose
+    translation files predate this key). "analytics_field_month" -> "Month",
+    "obs_palette_inferno" -> "Inferno" — never a raw underscored string.
+    """
+    remainder = key
+    for prefix in _KEY_PREFIXES:
+        if key.startswith(prefix) and len(key) > len(prefix):
+            remainder = key[len(prefix):]
+            break
+    return remainder.replace("_", " ").strip().title() or key
+
 # ── Path resolution ──────────────────────────────────────────────────────────
 _UTILS_DIR = os.path.dirname(os.path.abspath(__file__))
 _ROOT_DIR  = os.path.dirname(_UTILS_DIR)
@@ -99,8 +129,15 @@ def T(key: str, **kwargs) -> str:
     """Translate *key* into the current language.
 
     Falls back to English when a key is missing from the active language file
-    (supporting partial/stub translations for new languages).  Never returns
-    a bare key string when an English translation exists.
+    (supporting partial/stub translations for new languages). If the key is
+    missing from EVERY loaded catalogue — English included, e.g. a running
+    deployment whose translation files predate a key added after it was last
+    deployed — a humanized version of the key is shown instead of the raw
+    key string, so the UI never displays a literal underscored identifier
+    like "analytics_field_month"; it shows "Analytics Field Month" instead.
+    This is a safety net for a stale deployment, not a substitute for a real
+    translation — the moment updated JSON files are deployed, the real
+    value takes over automatically (see init_translations()).
 
     Args:
         key:      Translation key string.
@@ -108,7 +145,7 @@ def T(key: str, **kwargs) -> str:
 
     Returns:
         Translated string.  Fallback chain:
-          user_terminology override → target language → English → key itself.
+          user_terminology override → target language → English → humanized key.
     """
     lang = st.session_state.get("language", "en")
 
@@ -126,12 +163,12 @@ def T(key: str, **kwargs) -> str:
     if not en_dict:
         en_dict = _MODULE_TRANS.get("en") or {}
 
-    # Key lookup: user override → target language → English → key itself
+    # Key lookup: user override → target language → English → humanized key
     text = (
         user_terms.get(key)
         or lang_dict.get(key)
         or en_dict.get(key)
-        or key
+        or _humanize_key(key)
     )
 
     try:

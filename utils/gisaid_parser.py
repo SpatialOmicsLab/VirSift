@@ -5,13 +5,27 @@ utils/gisaid_parser.py
 GISAID-optimized FASTA parser. Zero biopython dependency — string-split
 parsing is faster for this known pipe-delimited format.
 
-Header format handled (both variants):
+Header format handled:
   Standard GISAID (6 fields):
     >isolate|subtype|segment|collection_date|accession|clade
     >A/Новосибирск/RII-7.429/2024|A_/_H3N2|HA|2024-01-17|EPI_ISL_123456|3C.2a1b
 
   v1.0 Normalized (9 fields):
     >name|type|subtype|segment|location|host|date|clade|accession
+
+  No-segment variant (content-detected, no fixed field count):
+    >isolate|subtype|date|accession-or-placeholder|clade
+    e.g. a header with no dedicated segment field at all. Detected by
+    content sniffing (utils/name_normalizer.py) rather than position —
+    only the segment field degrades to "Unknown"; date/accession/clade are
+    placed correctly regardless of position. See _parse_header() for detail.
+
+  Multi-segment reassortant tags (e.g. segment field = "HA/NA") are kept
+  verbatim (not discarded) with `is_reassortant_segment=True`.
+
+  A subtype embedded in the isolate/strain name itself that conflicts with
+  the header's own subtype field is captured in `subtype_isolate_embedded`
+  rather than silently overwriting either value.
 
 UTF-8 MANDATORY: caller must decode bytes as UTF-8 before passing file_content.
   Correct:   uploaded_file.read().decode('utf-8')
@@ -20,8 +34,9 @@ UTF-8 MANDATORY: caller must decode bytes as UTF-8 before passing file_content.
 Performance target: 10K sequences in < 5 seconds.
 """
 
-# Increment whenever host-inference, location-extraction, or field-order
-# detection logic changes — forces @st.cache_data to reparse all files.
+# Increment whenever host-inference, location-extraction, field-order
+# detection, or normalization logic changes — forces @st.cache_data to
+# reparse all files (including already-uploaded ones in a running session).
 _PARSER_VERSION = "v1.0"
 
 import gzip
@@ -33,6 +48,20 @@ import zipfile
 
 import pandas as pd
 import streamlit as st
+
+from utils.name_normalizer import (
+    _MIXED_LANGUAGE_HOST_TERMS,
+    _norm_key,
+    canonicalize_accession,
+    canonicalize_host_species,
+    find_embedded_subtype,
+    looks_like_accession,
+    looks_like_clade,
+    looks_like_date,
+    looks_like_multi_segment,
+    looks_like_segment,
+)
+from utils.host_tier_classifier import classify_host_tier
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +108,7 @@ def parse_gisaid_fasta(file_content: str, file_name: str,
                 # (Clustal Omega MSA output) compute correct lengths and hashes.
                 seq = "".join(current_seq_parts).upper().replace(" ", "").replace("-", "")
                 metadata = _parse_header(current_header)
+                metadata["original_header"] = current_header
                 metadata["sequence"] = seq
                 metadata["sequence_length"] = len(seq)
                 metadata["sequence_hash"] = compute_sequence_hash(seq)
@@ -92,6 +122,7 @@ def parse_gisaid_fasta(file_content: str, file_name: str,
     if current_header is not None:
         seq = "".join(current_seq_parts).upper().replace(" ", "").replace("-", "")
         metadata = _parse_header(current_header)
+        metadata["original_header"] = current_header
         metadata["sequence"] = seq
         metadata["sequence_length"] = len(seq)
         metadata["sequence_hash"] = compute_sequence_hash(seq)
@@ -189,6 +220,7 @@ def parse_flexible_date(date_str: str):
     date_str = date_str.strip()
     if date_str in ("", "Unknown", "unknown", "N/A", "NA", "None", "none"):
         return None
+    date_str = _strip_gisaid_xx_placeholders(date_str)
     for fmt in ("%Y-%m-%d", "%Y-%m", "%Y", "%d-%b-%Y", "%b-%Y", "%b-%d-%Y", "%Y%m%d"):
         try:
             return pd.to_datetime(date_str, format=fmt)
@@ -198,6 +230,41 @@ def parse_flexible_date(date_str: str):
         return pd.to_datetime(date_str)
     except Exception:
         return None
+
+
+def _normalize_hyphen_delimited_isolate(isolate_name: str) -> str:
+    """Convert a hyphen-delimited GISAID isolate name to the standard
+    slash-delimited form, so every downstream host/species/location
+    extraction function only ever has to handle one convention.
+
+    Some submitters export isolate names using "-" as the field delimiter
+    instead of "/" — e.g. "A-duck-Ibaraki-1-2016-E1_S1" instead of
+    "A/duck/Ibaraki/1/2016-E1_S1". Left unconverted, this breaks every
+    slash-based rule in this module: _is_flu_AB (startswith "A/") is False,
+    so host/location/species all fall through to "Unknown", or worse, the
+    RSV-style fallback scanner returns the whole mangled name as a fake
+    "species" (observed in real data as host_species = "a_ibaraki_1_2016_e1_s1").
+
+    Detection is deliberately narrow to avoid corrupting genuinely
+    hyphenated content (place names like "Ust-Kamchatsk", species names
+    like "white-fronted_goose", or compound strain IDs): only triggers when
+    the name has ZERO slashes AND starts with "A-" or "B-" — an
+    unambiguous signal, since a real slash-delimited name never starts
+    that way. Only the first three hyphens (Type|Host|Location boundaries,
+    which are always simple single-word tokens) become slashes; everything
+    from the ID field onward is left as one hyphenated tail, so a
+    compound/hyphenated strain-ID or year suffix is never split further.
+
+    "A-duck-Ibaraki-1-2016-E1_S1" -> "A/duck/Ibaraki/1-2016-E1_S1"
+    """
+    if "/" in isolate_name:
+        return isolate_name
+    if not (isolate_name.startswith("A-") or isolate_name.startswith("B-")):
+        return isolate_name
+    parts = isolate_name.split("-")
+    if len(parts) < 4:
+        return isolate_name
+    return "/".join(parts[:3]) + "/" + "-".join(parts[3:])
 
 
 def infer_host_from_isolate(isolate_name: str) -> str:
@@ -226,6 +293,7 @@ def infer_host_from_isolate(isolate_name: str) -> str:
     """
     if not isolate_name:
         return "Unknown"
+    isolate_name = _normalize_hyphen_delimited_isolate(isolate_name)
     name_lower = isolate_name.lower()
     if "/environment/" in name_lower:
         return "Environment"
@@ -307,11 +375,18 @@ def infer_host_from_isolate(isolate_name: str) -> str:
 def extract_location_from_isolate(isolate_name: str) -> str:
     """Extract geographic location from a GISAID isolate name.
 
-    Uses direct slot indexing for standard GISAID influenza A/B headers —
-    this is faster and immune to unrecognised host-name tokens:
+    Uses keyword-scan-first disambiguation (mirrors infer_host_from_isolate)
+    before falling back to slot indexing — a 4-part isolate name is only
+    genuinely "Human" (Type/Location/ID/Year) when slot 1 does NOT look like
+    a host token. A 4-part AVIAN name missing its strain-ID field (e.g.
+    "A/turkey/England/1969") would otherwise be misread as Human format,
+    returning the host name ("turkey") as the location instead of the real
+    location ("England") one slot later.
 
-      Avian (≥5 parts):  A / HOST / Location / ID / Year  → slot 2 = Location
-      Human (4 parts):   A / Location / ID / Year          → slot 1 = Location
+      Recognised host at slot 1 or 2:  Location = the slot right after it
+      No host recognised, ≥5 parts:    Avian/animal, unrecognised host at
+                                        slot 1 (structural guarantee) → slot 2
+      No host recognised, 4 parts:     Human format → slot 1
 
     Falls back to the skip-based scanner for RSV, MERS, SARS and other
     non-influenza or non-standard-length formats.
@@ -320,18 +395,25 @@ def extract_location_from_isolate(isolate_name: str) -> str:
     """
     if not isolate_name:
         return "Unknown"
+    isolate_name = _normalize_hyphen_delimited_isolate(isolate_name)
     parts = [p.strip() for p in isolate_name.split("/") if p.strip()]
     n = len(parts)
     _is_flu_AB = isolate_name.startswith("A/") or isolate_name.startswith("B/")
 
-    # Direct slot rule for standard influenza A/B ─────────────────────────────
-    if _is_flu_AB and n >= 5:
-        # Avian/animal format: [A, HOST, Location, ID, Year, …]
-        return parts[2]
+    if _is_flu_AB:
+        # ── Step 1: keyword scan at slots 1 and 2, same as infer_host_from_isolate ──
+        for _pos in (1, 2):
+            if _pos < n and _classify_isolate_part(parts[_pos]) is not None:
+                loc_slot = _pos + 1
+                return parts[loc_slot] if loc_slot < n else "Unknown"
 
-    if _is_flu_AB and n == 4:
-        # Human format: [A, Location, ID, Year]
-        return parts[1]
+        # ── Step 2: structural tiebreaker (no keyword match at slot 1/2) ──
+        if n >= 5:
+            # Avian/animal format: [A, HOST(unrecognised), Location, ID, Year, …]
+            return parts[2]
+        if n == 4:
+            # Human format: [A, Location, ID, Year]
+            return parts[1]
 
     # Skip-based scanner for RSV, MERS, SARS and other formats ───────────────
     # Skips the type prefix and any recognisable host tokens, then returns the
@@ -361,12 +443,19 @@ _SPECIES_COMMON_NAMES: dict = {
     "Anas_acuta":           "pintail",
     "Anas_clypeata":        "shoveler",
     "Anas_querquedula":     "garganey",
-    "Anas_penelope":        "wigeon",
+    "Anas_penelope":        "wigeon",  # a.k.a. European wigeon — see _COMMON_NAME_ALIASES
     "Anas_americana":       "American_wigeon",
     "Anas_discors":         "blue-winged_teal",
     "Anas_formosa":         "Baikal_teal",
     "Anas_poecilorhyncha":  "spot-billed_duck",
     "Anas_falcata":         "falcated_duck",
+    "Cairina_moschata":     "muscovy_duck",
+    # Tadorna — shelducks (genuinely distinct species, kept separate)
+    "Tadorna_ferruginea":   "ruddy_shelduck",
+    "Tadorna_tadorna":      "common_shelduck",
+    "Tadorna_variegata":    "paradise_shelduck",
+    # Scolopacidae — sandpipers, turnstones
+    "Arenaria_interpres":   "ruddy_turnstone",
     # Aythya — diving ducks
     "Aythya_ferina":        "pochard",
     "Aythya_fuligula":      "tufted_duck",
@@ -378,12 +467,15 @@ _SPECIES_COMMON_NAMES: dict = {
     "Anser_albifrons":      "white-fronted_goose",
     "Anser_brachyrhynchus": "pink-footed_goose",
     "Anser_caerulescens":   "snow_goose",
+    "Anser_cygnoides":      "swan_goose",
     "Branta_canadensis":    "Canada_goose",
     "Branta_bernicla":      "brent_goose",
     "Branta_leucopsis":     "barnacle_goose",
     # Mergus — mergansers
     "Mergus_merganser":     "merganser",
     "Mergus_serrator":      "red-breasted_merganser",
+    # Sternidae — terns
+    "Sterna_paradisaea":    "arctic_tern",
     # Cygnus — swans
     "Cygnus_olor":          "mute_swan",
     "Cygnus_cygnus":        "whooper_swan",
@@ -425,34 +517,48 @@ _SPECIES_COMMON_NAMES: dict = {
 def _extract_host_species(isolate_name: str) -> str:
     """Return the specific host-species token from a GISAID isolate name.
 
-    For standard influenza A/B with ≥5 slash parts the host token is
-    always at slot 1 (A / HOST / Location / ID / Year).  It is returned
-    directly regardless of whether the name is in our keyword database —
-    e.g. 'Podiceps_cristatus' will be returned verbatim even though that
-    genus is not yet in _AVIAN_GENERA.
+    Uses keyword-scan-first disambiguation (mirrors infer_host_from_isolate)
+    before falling back to slot indexing — a 4-part isolate name is only
+    genuinely human (no host slot) when slot 1 does NOT look like a host
+    token. A 4-part AVIAN name missing its strain-ID field (e.g.
+    "A/turkey/England/1969") is correctly recognised via the "turkey"
+    keyword match rather than being written off as human.
 
-    For 4-part human influenza (A / Location / ID / Year) returns 'Unknown'
-    because there is no host slot.
+    For standard influenza A/B with ≥5 slash parts and no keyword match,
+    the host token at slot 1 is still returned verbatim (structural
+    guarantee) — e.g. 'Podiceps_cristatus' even though that genus is not
+    yet in _AVIAN_GENERA.
+
+    For 4-part human influenza (A / Location / ID / Year) with no keyword
+    match at slot 1 returns 'Unknown' because there is no host slot.
 
     For RSV and other formats falls back to the skip-based scanner that
     walks parts and returns the first part recognised by _classify_isolate_part().
     """
     if not isolate_name:
         return "Unknown"
+    isolate_name = _normalize_hyphen_delimited_isolate(isolate_name)
     _skip = frozenset({"a", "b", "hrsv", "rsv", "mers-cov", "sars-cov", "environment"})
     parts = [p.strip() for p in isolate_name.split("/") if p.strip()]
     n = len(parts)
     _is_flu_AB = isolate_name.startswith("A/") or isolate_name.startswith("B/")
 
-    # Direct slot rule for standard influenza A/B ─────────────────────────────
-    if _is_flu_AB and n >= 5:
-        # Slot 1 = host species token (always present in avian/animal records)
-        token = parts[1]
-        raw = token if token.lower() not in _skip else "Unknown"
-        return _SPECIES_COMMON_NAMES.get(raw, raw)
+    if _is_flu_AB:
+        # ── Step 1: keyword scan at slots 1 and 2, same as infer_host_from_isolate ──
+        for _pos in (1, 2):
+            if _pos < n:
+                token = parts[_pos]
+                if token.lower() in _skip:
+                    continue
+                if _classify_isolate_part(token) is not None:
+                    return canonicalize_host_species(token, _SPECIES_COMMON_NAMES)
 
-    if _is_flu_AB and n == 4:
-        # Human format — no host slot
+        # ── Step 2: structural tiebreaker (no keyword match at slot 1/2) ──
+        if n >= 5:
+            # Unrecognised host token at slot 1 — still return it verbatim.
+            token = parts[1]
+            return "Unknown" if token.lower() in _skip else canonicalize_host_species(token, _SPECIES_COMMON_NAMES)
+        # 4-part or shorter with no keyword match = genuine human (no host slot)
         return "Unknown"
 
     # Fallback: skip-based scanner for RSV and other formats ──────────────────
@@ -460,8 +566,7 @@ def _extract_host_species(isolate_name: str) -> str:
         if not part or part.lower() in _skip:
             continue
         if _classify_isolate_part(part) is not None:
-            raw = part
-            return _SPECIES_COMMON_NAMES.get(raw, raw)
+            return canonicalize_host_species(part, _SPECIES_COMMON_NAMES)
     return "Unknown"
 
 
@@ -470,11 +575,18 @@ def compute_sequence_hash(sequence: str) -> str:
     return hashlib.md5(sequence.upper().encode()).hexdigest()[:12]
 
 
-def convert_df_to_fasta(df: pd.DataFrame) -> str:
+def convert_df_to_fasta(df: pd.DataFrame, header_format: str = "gisaid6") -> str:
     """Convert a filtered DataFrame back to FASTA format string.
 
     Fully vectorized header construction — no iterrows.
-    Reconstructs pipe-delimited GISAID-style headers.
+
+    Args:
+        header_format:
+            "gisaid6" (default, unchanged) — isolate|subtype|segment|date|accession|clade.
+            "full9" — the legacy v1.0 field order, isolate|type|segment|date|
+                      accession|clade|host|location, so host/location survive
+                      into the exported header text instead of staying only
+                      in the DataFrame/CSV export.
     """
     if df.empty:
         return ""
@@ -491,15 +603,28 @@ def convert_df_to_fasta(df: pd.DataFrame) -> str:
     else:
         date_str = pd.Series(["Unknown"] * len(df), index=df.index)
 
-    headers = (
-        ">"
-        + _col("isolate") + "|"
-        + _col("subtype") + "|"
-        + _col("segment") + "|"
-        + date_str + "|"
-        + _col("accession") + "|"
-        + _col("clade")
-    )
+    if header_format == "full9":
+        headers = (
+            ">"
+            + _col("isolate") + "|"
+            + _col("subtype") + "|"
+            + _col("segment") + "|"
+            + date_str + "|"
+            + _col("accession") + "|"
+            + _col("clade") + "|"
+            + _col("host") + "|"
+            + _col("location")
+        )
+    else:
+        headers = (
+            ">"
+            + _col("isolate") + "|"
+            + _col("subtype") + "|"
+            + _col("segment") + "|"
+            + date_str + "|"
+            + _col("accession") + "|"
+            + _col("clade")
+        )
     sequences = _col("sequence", "")
 
     # Vectorized interleave: ">{header}\n{seq}" per record, joined by \n
@@ -511,6 +636,11 @@ def convert_df_to_fasta(df: pd.DataFrame) -> str:
 # ---------------------------------------------------------------------------
 
 _HXNX_RE = re.compile(r"(H\d+N\d+)")
+# Fallback for HA-only or NA-only submissions where the other side of the
+# subtype was never typed (e.g. raw "A_/_H3" with no N number at all) — the
+# full H#N# pattern above never matches these, so subtype_clean silently
+# fell through to the raw, uncleaned string ("A_/_H3" instead of "H3").
+_HX_OR_NX_RE = re.compile(r"(H\d+|N\d+)")
 
 # ---------------------------------------------------------------------------
 # Latin genus → host-type lookup tables
@@ -646,10 +776,21 @@ def _classify_isolate_part(part: str) -> str | None:
       2. Compound underscore name: "common_teal", "mallard_duck", "domestic_chicken"
       3. Latin binomial:           "Anas_platyrhynchos", "Gallus_gallus", "Sus_scrofa"
     """
-    p = part.lower().strip()
+    p = _norm_key(part)
     if not p:
         return None
-    words = p.replace("-", "_").split("_")
+
+    # Mixed-language (Cyrillic) host terms — checked first, since the app
+    # already explicitly supports Cyrillic location names and the same
+    # real-world data carries Cyrillic host terms.
+    if p in _MIXED_LANGUAGE_HOST_TERMS:
+        mapped = _MIXED_LANGUAGE_HOST_TERMS[p]
+        if mapped in _AVIAN_KW or mapped == "wild_bird":
+            return "Avian"
+        if mapped in _MAMMAL_KW:
+            return "Mammalian"
+
+    words = p.split("_")
     genus = words[0]
 
     # Latin genus lookup (fast O(1) frozenset check)
@@ -688,6 +829,30 @@ _SLOW_DATE_FMTS = ("%Y-%m", "%Y", "%d-%b-%Y", "%b-%Y", "%b-%d-%Y", "%Y%m%d")
 
 _DATE_NULL_SET = frozenset(("", "Unknown", "unknown", "N/A", "NA", "None", "none"))
 
+# GISAID's own submission/export convention represents an unknown date
+# component with a literal "XX" rather than omitting it: "2013-01-XX" (day
+# unknown), "2011-XX-XX" (month+day unknown). Left as-is, these fail every
+# format above and the WHOLE date is lost as "Unknown" even when the year
+# (or year+month) is genuinely known. Truncating to the known prefix first
+# reduces "2013-01-XX" -> "2013-01" and "2011-XX-XX" -> "2011", which the
+# existing "%Y-%m" / "%Y" formats already parse correctly — so precision
+# that IS available is kept instead of being discarded along with the part
+# that isn't. A year that is itself partly unknown ("20XX-XX-XX") has no
+# concrete year to fall back to and is intentionally left unparsed.
+_GISAID_XX_DAY_RE = re.compile(r"^(\d{4}-\d{2})-XX$", re.IGNORECASE)
+_GISAID_XX_MONTH_DAY_RE = re.compile(r"^(\d{4})-XX-XX$", re.IGNORECASE)
+
+
+def _strip_gisaid_xx_placeholders(raw: str) -> str:
+    """Truncate a GISAID XX-placeholder date to its known prefix, if any."""
+    m = _GISAID_XX_DAY_RE.match(raw)
+    if m:
+        return m.group(1)
+    m = _GISAID_XX_MONTH_DAY_RE.match(raw)
+    if m:
+        return m.group(1)
+    return raw
+
 
 def _batch_parse_dates(date_strings: list) -> list:
     """Vectorized date parser — converts a list of raw date strings to
@@ -706,6 +871,11 @@ def _batch_parse_dates(date_strings: list) -> list:
         return []
 
     s = pd.Series(date_strings, dtype=str)
+
+    # Step 0: truncate GISAID "XX" placeholders to their known prefix
+    # (vectorized) so partial precision survives instead of being lost.
+    s = s.str.replace(_GISAID_XX_DAY_RE, r"\1", regex=True)
+    s = s.str.replace(_GISAID_XX_MONTH_DAY_RE, r"\1", regex=True)
 
     # Step 1: fast vectorized parse on the dominant format
     fast = pd.to_datetime(s, format=_FAST_DATE_FMT, errors="coerce")
@@ -763,6 +933,7 @@ def _parse_header(header: str) -> dict:
     if n >= 9:
         # v1.0 Normalized: name | type | subtype | segment | location | host | date | clade | accession
         _v1_host = parts[5] if n > 5 else "Unknown"
+        _v1_accession = parts[8] if n > 8 else "Unknown"
         metadata = {
             "isolate":      parts[0],
             "subtype":      parts[2] if n > 2 else "Unknown",
@@ -770,20 +941,21 @@ def _parse_header(header: str) -> dict:
             "location":     parts[4] if n > 4 else "Unknown",
             "host":         _v1_host,
             "host_species": _extract_host_species(parts[0]) if _v1_host == "Unknown"
-                            else _v1_host,
+                            else canonicalize_host_species(_v1_host, _SPECIES_COMMON_NAMES),
             "_raw_date":    parts[6] if n > 6 else "",
             "clade":        parts[7] if n > 7 else "Unknown",
-            "accession":    parts[8] if n > 8 else "Unknown",
+            "accession":    canonicalize_accession(_v1_accession) if _v1_accession != "Unknown" else "Unknown",
         }
     elif n <= 3:
         # hRSV / short format: isolate | accession | date
         # (also handles degenerate 1- or 2-field headers gracefully)
         raw_isolate = parts[0] if n > 0 else "Unknown"
+        _short_accession = parts[1] if n > 1 else "Unknown"
         metadata = {
             "isolate":      raw_isolate,
             "subtype":      "Unknown",
             "segment":      "Unknown",
-            "accession":    parts[1] if n > 1 else "Unknown",
+            "accession":    canonicalize_accession(_short_accession) if _short_accession != "Unknown" else "Unknown",
             "_raw_date":    parts[2] if n > 2 else "",
             "clade":        "Unknown",
             "host":         infer_host_from_isolate(raw_isolate),
@@ -791,38 +963,117 @@ def _parse_header(header: str) -> dict:
             "location":     extract_location_from_isolate(raw_isolate),
         }
     else:
-        # 4–8 field headers: detect avian vs human field order by checking
-        # whether parts[1] is a known segment name.
-        #   Avian batch:  isolate | SEGMENT | subtype | date | accession | clade
-        #   Human/B std:  isolate | subtype | SEGMENT | date | accession | clade
+        # 4–8 field headers: content-aware field-type detection.
+        #
+        # Two structurally different sub-formats share this field-count range:
+        #   A) Has a segment field:
+        #        Avian batch:  isolate | SEGMENT | subtype | date | accession | clade
+        #        Human/B std:  isolate | subtype | SEGMENT | date | accession | clade
+        #   B) No segment field at all (confirmed real-world variant):
+        #        isolate | subtype | date | accession-or-placeholder | clade
+        #
+        # Distinguishing (A) from (B) by position alone silently corrupts (B) —
+        # a fixed-position read would misassign segment=date-value and
+        # accession=clade-value. Instead: detect segment by CONTENT
+        # (known segment token, or a multi-segment reassortant tag like
+        # "HA/NA"), then classify every remaining field by content too
+        # (looks_like_date / looks_like_clade / looks_like_accession) rather
+        # than trusting position. This guarantees a missing segment degrades
+        # ONLY the segment field — nothing else in the record is affected —
+        # and a literal "Unknown"/blank placeholder in the source data is
+        # never mistaken for a real accession value.
         raw_isolate = parts[0] if n > 0 else "Unknown"
-        p1 = parts[1] if n > 1 else "Unknown"
-        p2 = parts[2] if n > 2 else "Unknown"
+        p1 = parts[1] if n > 1 else ""
+        p2 = parts[2] if n > 2 else ""
 
-        if p1.upper() in _KNOWN_SEGMENTS:
-            # Avian format: segment is in position 1, subtype in position 2
+        p1_is_segment = looks_like_segment(p1, _KNOWN_SEGMENTS)
+        p2_is_segment = looks_like_segment(p2, _KNOWN_SEGMENTS)
+        p1_multi_seg = None if p1_is_segment else looks_like_multi_segment(p1, _KNOWN_SEGMENTS)
+        p2_multi_seg = None if p2_is_segment else looks_like_multi_segment(p2, _KNOWN_SEGMENTS)
+
+        is_reassortant = False
+        if p1_is_segment or p1_multi_seg:
+            # Avian batch order: isolate | SEGMENT | subtype | date | accession | clade
             segment = p1
-            subtype  = p2
+            subtype = p2
+            is_reassortant = bool(p1_multi_seg)
+            rest = parts[3:]
+        elif p2_is_segment or p2_multi_seg:
+            # Human/B order: isolate | subtype | SEGMENT | date | accession | clade
+            subtype = p1
+            segment = p2
+            is_reassortant = bool(p2_multi_seg)
+            rest = parts[3:]
         else:
-            # Human/B format: subtype is in position 1, segment in position 2
-            subtype  = p1
-            segment  = p2
+            # No segment field present — variant (B). Only this field
+            # degrades; date/accession/clade are recovered by content below.
+            subtype = p1
+            segment = "Unknown"
+            rest = parts[2:]
+
+        # Classify remaining fields by content, not position.
+        _PLACEHOLDER_VALUES = ("", "Unknown", "unknown", "N/A", "NA", "None", "none")
+        date_val, accession_val, clade_val = "", "Unknown", "Unknown"
+        unclassified = []
+        for f in rest:
+            if not date_val and looks_like_date(f):
+                date_val = f
+            elif clade_val == "Unknown" and looks_like_clade(f):
+                clade_val = f
+            elif accession_val == "Unknown" and looks_like_accession(f):
+                accession_val = f
+            else:
+                unclassified.append(f)
+        # Fill any still-default slot from leftover fields, preserving
+        # original field order — matters only when content sniffing is
+        # inconclusive; never lets a placeholder value become the accession.
+        for f in unclassified:
+            if not date_val:
+                date_val = f
+            elif accession_val == "Unknown" and f not in _PLACEHOLDER_VALUES:
+                accession_val = f
+            elif clade_val == "Unknown" and f not in _PLACEHOLDER_VALUES:
+                clade_val = f
 
         metadata = {
             "isolate":      raw_isolate,
             "subtype":      subtype,
             "segment":      segment,
-            "_raw_date":    parts[3] if n > 3 else "",
-            "accession":    parts[4] if n > 4 else "Unknown",
-            "clade":        parts[5] if n > 5 else "Unknown",
+            "is_reassortant_segment": is_reassortant,
+            "_raw_date":    date_val,
+            "accession":    canonicalize_accession(accession_val) if accession_val != "Unknown" else "Unknown",
+            "clade":        clade_val if clade_val else "Unknown",
             "host":         infer_host_from_isolate(raw_isolate),
             "host_species": _extract_host_species(raw_isolate),
             "location":     extract_location_from_isolate(raw_isolate),
         }
 
-    # subtype_clean: "A_/_H3N2" → "H3N2", "H5N1" stays as-is
+    # subtype_clean: "A_/_H3N2" → "H3N2", "H5N1" stays as-is.
+    # HA-only/NA-only submissions never have a full H#N# pair (e.g. raw
+    # "A_/_H3" with the N side untyped) — fall back to matching H# or N#
+    # alone rather than leaving the raw "A_/_H3" string uncleaned.
     m = _HXNX_RE.search(metadata["subtype"])
-    metadata["subtype_clean"] = m.group(1) if m else metadata["subtype"]
+    if m:
+        metadata["subtype_clean"] = m.group(1)
+    else:
+        m2 = _HX_OR_NX_RE.search(metadata["subtype"])
+        metadata["subtype_clean"] = m2.group(1) if m2 else metadata["subtype"]
+
+    # Double-subtype check: a subtype embedded in the isolate/strain name
+    # itself (e.g. "A/duck/China/H5N1/1/2020") that conflicts with the
+    # header's own subtype field. Never silently overwrites either value —
+    # surfaced via this column so the Header Converter can flag it.
+    _embedded = find_embedded_subtype(metadata["isolate"])
+    metadata["subtype_isolate_embedded"] = (
+        _embedded if _embedded and _embedded != metadata["subtype_clean"].upper() else None
+    )
+
+    # Reassortant-segment flag defaults to False for branches that always
+    # have an explicit single segment field (v1.0 Normalized, hRSV/short).
+    metadata.setdefault("is_reassortant_segment", False)
+
+    # Biosecurity tier — derived from host/host_species, never overwrites them.
+    metadata["host_tier"] = classify_host_tier(metadata["host"], metadata["host_species"])
 
     # Hierarchical clade levels: "3C.2a1b.2a.2a" → l1="3C", l2="3C.2a1b", ...
     clade_val = metadata.get("clade") or "Unknown"

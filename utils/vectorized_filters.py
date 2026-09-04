@@ -12,6 +12,8 @@ import re
 
 import pandas as pd
 
+from utils.name_normalizer import canonicalize_accession
+
 
 class VectorizedFilterEngine:
     """Boolean mask filter combinator for GISAID sequence DataFrames.
@@ -263,8 +265,100 @@ class VectorizedFilterEngine:
     def filter_accessions(
         self, df: pd.DataFrame, accession_list: list
     ) -> pd.DataFrame:
-        """Keep only rows whose EPI_ISL accession is in accession_list."""
+        """Keep only rows whose EPI_ISL accession is in accession_list.
+
+        Both the input list and the dataset's accession column are run
+        through canonicalize_accession() first, so "EPI_ISL_123",
+        "EPI ISL 123", and "epi-isl-123" all match the same record
+        regardless of which spacing/casing variant either side used.
+        """
         if "accession" not in df.columns or not accession_list:
             return df
-        clean = [a.strip() for a in accession_list if a.strip()]
-        return df[df["accession"].isin(clean)].copy()
+        clean = {canonicalize_accession(a.strip()) for a in accession_list if a.strip()}
+        canon_col = df["accession"].astype(str).map(canonicalize_accession)
+        return df[canon_col.isin(clean)].copy()
+
+    # ------------------------------------------------------------------
+    # v1.0 parity: Clade-Based Monthly Filter & Enhanced Temporal
+    # Diversity Filter (ported from fasta_analysis_app_final.py's
+    # SequenceAnalyzer, rebuilt vectorized — no iterrows).
+    # ------------------------------------------------------------------
+
+    def filter_clade_monthly(
+        self, df: pd.DataFrame, clades: list, keep: str = "both", separate: bool = True,
+    ) -> pd.DataFrame:
+        """Restrict to selected clade(s), then keep first/last/both per calendar month.
+
+        Args:
+            clades: clade values to include (matched against the raw 'clade' column).
+            keep: 'first' | 'last' | 'both' — which record(s) to keep per month bucket.
+            separate: if True, buckets are (clade, month) independently per clade
+                      (each clade's monthly diversity preserved separately);
+                      if False, all selected clades share one set of monthly
+                      buckets (keeps the temporal spread but pools clades together).
+        """
+        if df.empty or not clades or "clade" not in df.columns or "collection_date" not in df.columns:
+            return df
+
+        subset = df[df["clade"].isin(clades) & df["collection_date"].notna()].copy()
+        if subset.empty:
+            return subset
+
+        subset["_month"] = subset["collection_date"].dt.to_period("M").astype(str)
+        group_cols = ["clade", "_month"] if separate else ["_month"]
+        subset = subset.sort_values("collection_date")
+
+        if keep == "first":
+            result = subset.groupby(group_cols).head(1)
+        elif keep == "last":
+            result = subset.groupby(group_cols).tail(1)
+        else:  # both
+            result = pd.concat([
+                subset.groupby(group_cols).head(1),
+                subset.groupby(group_cols).tail(1),
+            ])
+            dedup_cols = ["sequence_hash"] if "sequence_hash" in result.columns else None
+            result = result.drop_duplicates(subset=dedup_cols)
+
+        return result.drop(columns=["_month"]).copy()
+
+    def enhanced_temporal_filter(
+        self, df: pd.DataFrame, group_by_fields: list,
+        sort_by: str = "collection_date", keep: str = "first",
+    ) -> pd.DataFrame:
+        """Flexible multi-field group-by + sort + keep-N-per-group subsampling.
+
+        This is the balanced-subsampling tool: group by any combination of
+        columns (e.g. host + location, or host + clade), sort within each
+        group, and keep first/last/both — for building a representative
+        subsample across attribute combinations rather than just time.
+
+        Args:
+            group_by_fields: columns to group by (e.g. ['host', 'location']).
+            sort_by: column to sort within each group before keeping (default date).
+            keep: 'first' | 'last' | 'both'.
+        """
+        if df.empty or not group_by_fields:
+            return df
+
+        valid_cols = [c for c in group_by_fields if c in df.columns]
+        if not valid_cols:
+            return df
+
+        subset = df.copy()
+        if sort_by in subset.columns:
+            subset = subset.sort_values(sort_by)
+
+        if keep == "first":
+            result = subset.groupby(valid_cols).head(1)
+        elif keep == "last":
+            result = subset.groupby(valid_cols).tail(1)
+        else:  # both
+            result = pd.concat([
+                subset.groupby(valid_cols).head(1),
+                subset.groupby(valid_cols).tail(1),
+            ])
+            dedup_cols = ["sequence_hash"] if "sequence_hash" in result.columns else None
+            result = result.drop_duplicates(subset=dedup_cols)
+
+        return result.copy()
