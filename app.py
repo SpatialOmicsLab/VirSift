@@ -93,6 +93,7 @@ def _init_session_state() -> None:
         # Prepended to every downloaded file name across all pages.
         # E.g. "myproject" → myproject_20250225_1430.fasta
         "export_prefix": "virsift",
+        "export_header_format": "gisaid6",
     }
     for key, default in defaults.items():
         if key not in st.session_state:
@@ -679,6 +680,19 @@ def _render_sidebar() -> None:
         else:
             st.session_state["export_prefix"] = "virsift"
 
+        # --- Export header format (applies to every FASTA download, every page) ---
+        _fmt_options = ["gisaid6", "full9"]
+        _fmt_labels = {"gisaid6": T("sidebar_export_fmt_gisaid6"), "full9": T("sidebar_export_fmt_full9")}
+        _cur_fmt = st.session_state.get("export_header_format", "gisaid6")
+        _new_fmt = st.radio(
+            T("sidebar_export_fmt_label"),
+            options=_fmt_options,
+            index=_fmt_options.index(_cur_fmt) if _cur_fmt in _fmt_options else 0,
+            format_func=lambda v: _fmt_labels[v],
+            key="export_header_format",
+            help=T("sidebar_export_fmt_help"),
+        )
+
         # --- Quick Actions ---
         st.markdown(f"**{T('sidebar_quick_actions')}**")
 
@@ -686,7 +700,10 @@ def _render_sidebar() -> None:
         if not _filtered_df.empty:
             try:
                 from utils.gisaid_parser import convert_df_to_fasta
-                _fasta_out = convert_df_to_fasta(_filtered_df)
+                _fasta_out = convert_df_to_fasta(
+                    _filtered_df,
+                    header_format=st.session_state.get("export_header_format", "gisaid6"),
+                )
                 _pfx = st.session_state.get("export_prefix", "virsift") or "virsift"
                 st.download_button(
                     label=T("download_fasta_label", count=len(_filtered_df)),
