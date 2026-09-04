@@ -15,6 +15,7 @@ import streamlit as st
 
 from utils.gisaid_parser import convert_df_to_fasta
 from utils.minimal_i18n import T
+from utils.ui_helpers import slider_with_number_input
 from utils.vectorized_filters import VectorizedFilterEngine
 
 st.title(f"🧬 {T('nav_filter_lab')}")
@@ -54,8 +55,9 @@ def _download_row(df: pd.DataFrame, label_prefix: str) -> None:
         return
     _pfx = st.session_state.get("export_prefix", "virsift") or "virsift"
     _slug = label_prefix.lower().replace(" ", "_")
+    _fmt = "full9" if st.session_state.get("export_header_format") == "full9" else "gisaid6"
     c1, c2 = st.columns(2)
-    fasta_str = convert_df_to_fasta(df)
+    fasta_str = convert_df_to_fasta(df, header_format=_fmt)
     c1.download_button(
         label=f"⬇ {label_prefix} — FASTA ({len(df):,} seqs)",
         data=fasta_str.encode("utf-8"),
@@ -131,6 +133,132 @@ st.divider()
 
 
 # ===========================================================================
+# HEADER CONVERTER — Smart Header Fixer
+# ===========================================================================
+# Diagnostic panel, not a destructive transform: the actual field-recovery
+# already happened at parse time (utils/gisaid_parser.py's content-aware
+# _parse_header). This panel surfaces WHAT got auto-corrected and WHY, plus
+# known-good reference formats, so a user with messy source data understands
+# what VirSift did and can spot anything that still needs a manual look.
+
+with st.expander(f"🩺 {T('header_converter_header')}"):
+    st.caption(T("header_converter_caption"))
+
+    _hc_flags = []
+    _hc_n = len(_active_df)
+
+    if "is_reassortant_segment" in _active_df.columns:
+        _n_reassort = int(_active_df["is_reassortant_segment"].fillna(False).sum())
+        if _n_reassort:
+            _hc_flags.append(("info", T("header_converter_reassortant_note", n=_n_reassort)))
+
+    if "segment" in _active_df.columns:
+        _n_no_seg = int((_active_df["segment"] == "Unknown").sum())
+        if _n_no_seg:
+            _hc_flags.append((
+                "warning",
+                T("header_converter_no_segment_note", n=_n_no_seg,
+                  pct=round(100 * _n_no_seg / max(_hc_n, 1), 1)),
+            ))
+
+    if "subtype_isolate_embedded" in _active_df.columns:
+        _n_conflict = int(_active_df["subtype_isolate_embedded"].notna().sum())
+        if _n_conflict:
+            _hc_flags.append(("warning", T("header_converter_subtype_conflict_note", n=_n_conflict)))
+
+    if "accession" in _active_df.columns:
+        _n_no_acc = int((_active_df["accession"] == "Unknown").sum())
+        if _n_no_acc:
+            _hc_flags.append(("info", T("header_converter_no_accession_note", n=_n_no_acc)))
+
+    if not _hc_flags:
+        st.success(T("header_converter_all_clean"))
+    else:
+        for level, msg in _hc_flags:
+            getattr(st, level)(msg)
+
+    if "original_header" in _active_df.columns and _hc_n:
+        _hc_sample_n = min(20, _hc_n)
+        st.caption(T("header_converter_sample_caption", n=_hc_sample_n))
+        _hc_cols = [c for c in [
+            "original_header", "isolate", "subtype_clean", "segment",
+            "collection_date", "accession", "clade",
+            "is_reassortant_segment", "subtype_isolate_embedded",
+        ] if c in _active_df.columns]
+        st.dataframe(_active_df[_hc_cols].head(_hc_sample_n),
+                    use_container_width=True, hide_index=True)
+
+    with st.expander(T("header_converter_reference_header")):
+        st.markdown(T("header_converter_reference_body"))
+
+    # ── Manual fix — the actual "convert" action ───────────────────────────
+    # Everything above is diagnostic (what the automatic parser already
+    # did); this is where a record it couldn't confidently resolve gets
+    # genuinely fixed. Writes to filtered_df only, same rule as every other
+    # control on this page, and is logged to the audit trail like any other
+    # filtering action. Fixing host_species also recomputes host_tier for
+    # the same rows, since the tier is derived from it.
+    st.markdown("---")
+    st.markdown(f"**✏️ {T('header_converter_fix_header')}**")
+    st.caption(T("header_converter_fix_caption"))
+
+    _hc_fixable_fields = {
+        "host_species": "Unknown", "host_tier": "Unclassified",
+        "location": "Unknown", "clade": "Unknown",
+        "subtype_clean": "Unknown", "host": "Unknown",
+    }
+    _hc_field_labels = {col: T(f"filter_field_{col}") for col in _hc_fixable_fields}
+    _hc_fix_fields = {
+        _hc_field_labels[col]: (col, bad_val)
+        for col, bad_val in _hc_fixable_fields.items()
+        if col in current.columns and (current[col].astype(str) == bad_val).any()
+    }
+
+    if not _hc_fix_fields:
+        st.caption(T("header_converter_fix_none"))
+    else:
+        fc1, fc2 = st.columns([1, 2])
+        with fc1:
+            _fix_field_label = st.selectbox(
+                T("header_converter_fix_field_label"),
+                options=list(_hc_fix_fields.keys()), key="hc_fix_field",
+            )
+        _fix_col, _fix_bad_val = _hc_fix_fields[_fix_field_label]
+        _affected_isolates = sorted(
+            current.loc[current[_fix_col].astype(str) == _fix_bad_val, "isolate"]
+            .dropna().unique().tolist()
+        )
+        with fc2:
+            _fix_isolate = st.selectbox(
+                T("header_converter_fix_record_label", n=len(_affected_isolates)),
+                options=_affected_isolates, key="hc_fix_isolate",
+            )
+        _fix_new_val = st.text_input(
+            T("header_converter_fix_value_label", field=_fix_field_label),
+            key="hc_fix_new_val",
+            placeholder=T("header_converter_fix_value_placeholder"),
+        )
+        if st.button(T("header_converter_fix_apply_btn"), type="primary",
+                     disabled=not _fix_new_val.strip()):
+            _fix_target = current.copy()
+            _mask = _fix_target["isolate"] == _fix_isolate
+            _n_affected = int(_mask.sum())
+            _new_val_clean = _fix_new_val.strip()
+            _fix_target.loc[_mask, _fix_col] = _new_val_clean
+            if _fix_col == "host_species" and "host_tier" in _fix_target.columns:
+                from utils.host_tier_classifier import classify_host_tier
+                _fix_target.loc[_mask, "host_tier"] = _fix_target.loc[_mask].apply(
+                    lambda r: classify_host_tier(r.get("host", "Unknown"), _new_val_clean), axis=1
+                )
+            _save_filtered(_fix_target, f"manual_fix_{_fix_col}")
+            st.success(T("header_converter_fix_success", n=_n_affected,
+                          isolate=_fix_isolate, field=_fix_field_label, value=_new_val_clean))
+            st.rerun()
+
+st.divider()
+
+
+# ===========================================================================
 # PHASE 2 — SECTION A: Quality Filters
 # ===========================================================================
 
@@ -146,23 +274,25 @@ with st.expander(f"🔬 {T('filter_quality_header')}", expanded=True):
             p5 = int(_active_df["sequence_length"].quantile(0.05))
             default_min = max(100, p5)
             max_len = int(_active_df["sequence_length"].max())
-        min_len = st.slider(
+        min_len = slider_with_number_input(
             T("filter_min_length"),
             min_value=0,
             max_value=max_len,
-            value=default_min,
+            default=default_min,
             step=50,
             help=T("filter_min_length_help"),
+            key_prefix="ref_min_len",
         )
 
     with col_n:
-        max_n_run = st.slider(
+        max_n_run = slider_with_number_input(
             T("filter_max_n_run"),
             min_value=1,
             max_value=100,
-            value=10,
+            default=10,
             step=1,
             help=T("filter_max_n_run_help"),
+            key_prefix="ref_max_n_run",
         )
 
     dedup_mode = st.radio(
@@ -213,19 +343,36 @@ with st.expander(f"🏷 {T('filter_header_comp_header')}"):
 
         rules: list = st.session_state["filter_rules"]
 
+        # Translated display labels for raw column names / operator tokens —
+        # the engine always receives the raw field/operator string; only the
+        # selectbox display goes through T(). Unknown columns (dynamically
+        # detected, not every possible one has a translation key) fall back
+        # to a locale-agnostic prettified form rather than a raw key string.
+        def _field_display_label(col: str) -> str:
+            key = f"filter_field_{col}"
+            translated = T(key)
+            return translated if translated != key else col.replace("_", " ").title()
+
+        _field_label_map = {_field_display_label(c): c for c in available_fields.keys()}
+
+        _OPERATOR_TOKENS = ["equals", "not_equals", "contains", "not_contains",
+                             "starts_with", "in_list", "date_range", "regex"]
+        _op_label_map = {T(f"filter_op_{op}"): op for op in _OPERATOR_TOKENS}
+
         st.markdown(f"**{T('filter_add_rule_header')}**")
         ra, rb, rc, rd = st.columns([2, 2, 3, 1])
         with ra:
-            new_field = st.selectbox(
-                T("filter_field_label"), options=list(available_fields.keys()), key="new_field"
+            new_field_label = st.selectbox(
+                T("filter_field_label"), options=list(_field_label_map.keys()), key="new_field"
             )
+            new_field = _field_label_map[new_field_label]
         with rb:
-            new_op = st.selectbox(
+            new_op_label = st.selectbox(
                 T("filter_operator_label"),
-                options=["equals", "not_equals", "contains", "not_contains",
-                         "starts_with", "in_list", "date_range", "regex"],
+                options=list(_op_label_map.keys()),
                 key="new_op",
             )
+            new_op = _op_label_map[new_op_label]
         with rc:
             new_val = st.text_input(
                 T("filter_value_label"),
@@ -339,6 +486,7 @@ with st.expander(f"🧠 {T('hitl_header')}"):
             T("hitl_strategy_checklist"),
             T("hitl_strategy_lasso"),
             T("hitl_strategy_checkpoints"),
+            T("hitl_strategy_clade_monthly"),
         ],
         key="hitl_strategy",
         help=T("hitl_strategy_help"),
@@ -585,6 +733,94 @@ with st.expander(f"🧠 {T('hitl_header')}"):
                 f"near {len(checkpoints)} checkpoints (\u00b1{tol_days}d)."
             )
             _download_row(result, "Checkpoint Sample")
+            st.rerun()
+
+    # -----------------------------------------------------------------------
+    # Strategy 6 — Clade-Based Monthly Filter (v1.0 parity)
+    # -----------------------------------------------------------------------
+    elif strategy == T("hitl_strategy_clade_monthly"):
+        st.markdown(T("hitl_clade_monthly_desc"))
+
+        if "clade" not in current.columns or current["clade"].dropna().empty:
+            st.info(T("hitl_clade_monthly_no_data"))
+        else:
+            clade_options = sorted(
+                c for c in current["clade"].dropna().unique().tolist()
+                if c not in ("Unknown", "")
+            )
+            selected_clades = st.multiselect(
+                T("hitl_clade_monthly_select"), options=clade_options,
+                default=clade_options[:3], key="clade_monthly_clades",
+            )
+            cm_keep = st.selectbox(
+                T("hitl_clade_monthly_keep"),
+                options=["first", "last", "both"],
+                format_func=lambda v: T(f"hitl_clade_monthly_keep_{v}"),
+                index=2, key="clade_monthly_keep",
+            )
+            cm_separate = st.checkbox(
+                T("hitl_clade_monthly_separate"), value=True, key="clade_monthly_separate",
+                help=T("hitl_clade_monthly_separate_help"),
+            )
+            if st.button(T("hitl_apply_clade_monthly"), type="primary",
+                         disabled=not selected_clades, use_container_width=True):
+                with st.spinner(T("hitl_sampling")):
+                    result = engine.filter_clade_monthly(
+                        current, selected_clades, keep=cm_keep, separate=cm_separate,
+                    )
+                _save_filtered(result, "clade_monthly_filter")
+                st.success(
+                    f"{T('hitl_strategy_clade_monthly')} — {len(result):,} sequences "
+                    f"from {len(selected_clades)} clade(s)."
+                )
+                _download_row(result, "Clade Monthly Sample")
+                st.rerun()
+
+
+# ===========================================================================
+# SECTION E: Enhanced Temporal Diversity Filter (v1.0 parity)
+# ===========================================================================
+# Not date/period-based like Section D's HITL strategies — this groups by
+# arbitrary attribute combinations (host, location, clade, segment, ...) for
+# building a balanced subsample across those dimensions, not just time.
+
+with st.expander(f"⚖️ {T('etdf_header')}"):
+    st.caption(T("etdf_caption"))
+
+    _etdf_field_map = {
+        T(f"filter_field_{c}"): c for c in
+        ["host", "host_species", "host_tier", "location", "clade", "clade_l1",
+         "segment", "subtype_clean"]
+        if c in current.columns and current[c].notna().any()
+    }
+
+    if not _etdf_field_map:
+        st.info(T("etdf_no_fields"))
+    else:
+        etdf_group_labels = st.multiselect(
+            T("etdf_group_by"), options=list(_etdf_field_map.keys()),
+            key="etdf_group_by",
+        )
+        etdf_sort_col = "collection_date" if "collection_date" in current.columns else None
+        etdf_keep = st.selectbox(
+            T("etdf_keep"), options=["first", "last", "both"],
+            format_func=lambda v: T(f"hitl_clade_monthly_keep_{v}"),
+            index=0, key="etdf_keep",
+        )
+        if st.button(T("etdf_apply"), type="primary",
+                     disabled=not etdf_group_labels, use_container_width=True):
+            group_fields = [_etdf_field_map[l] for l in etdf_group_labels]
+            with st.spinner(T("hitl_sampling")):
+                result = engine.enhanced_temporal_filter(
+                    current, group_fields, sort_by=etdf_sort_col or "collection_date",
+                    keep=etdf_keep,
+                )
+            _save_filtered(result, "enhanced_temporal_filter")
+            st.success(
+                f"{T('etdf_header')} — {len(result):,} sequences "
+                f"across {len(group_fields)} grouping field(s)."
+            )
+            _download_row(result, "Diversity Sample")
             st.rerun()
 
 

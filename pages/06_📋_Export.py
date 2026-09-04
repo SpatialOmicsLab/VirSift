@@ -19,6 +19,7 @@ import streamlit as st
 
 from utils.gisaid_parser import convert_df_to_fasta
 from utils.minimal_i18n import T
+from utils.ui_helpers import render_host_tier_glossary
 
 st.title(f"\U0001f4cb {T('export_header')}")
 
@@ -32,6 +33,11 @@ if _active_df.empty:
 # Export source: filtered preferred, else active
 _export_df = _filtered_df if not _filtered_df.empty else _active_df
 _src_label  = T("export_split_filtered") if not _filtered_df.empty else T("export_split_active")
+
+# Header format toggle set in the sidebar (app.py) — applies to every FASTA
+# download on this page. "gisaid6" (default) = isolate|subtype|segment|date|
+# accession|clade. "full9" = legacy v1.0 order, adds host|location.
+_export_fmt = st.session_state.get("export_header_format", "gisaid6")
 
 st.caption(
     f"**{T('export_source_label')}:** {_src_label} "
@@ -65,7 +71,7 @@ q1, q2, q3, q4 = st.columns(4)
 
 # — FASTA
 with q1:
-    fasta_str = convert_df_to_fasta(_export_df)
+    fasta_str = convert_df_to_fasta(_export_df, header_format=_export_fmt)
     st.download_button(
         label=T("export_fasta_btn", n=f"{len(_export_df):,}"),
         data=fasta_str.encode("utf-8"),
@@ -171,7 +177,7 @@ if len(_contrib_ex) > 1:
 
         with _pf_c1:
             try:
-                _pf_fasta = convert_df_to_fasta(_pf_df)
+                _pf_fasta = convert_df_to_fasta(_pf_df, header_format=_export_fmt)
             except Exception:
                 _lines = []
                 for _, _r in _pf_df.iterrows():
@@ -219,7 +225,7 @@ if len(_contrib_ex) > 1:
                         _z_df   = pd.DataFrame(_zrf["parsed"])
                         _z_safe = _re_ex.sub(r"[^\w\-]", "_", _zrf["name"])[:40]
                         try:
-                            _z_fa = convert_df_to_fasta(_z_df)
+                            _z_fa = convert_df_to_fasta(_z_df, header_format=_export_fmt)
                         except Exception:
                             _zl = []
                             for _, _r in _z_df.iterrows():
@@ -256,7 +262,7 @@ if _tl_result_df is not None and not _tl_result_df.empty:
     _tl_q1, _tl_q2, _tl_q3 = st.columns(3)
 
     with _tl_q1:
-        _tl_fasta_str = convert_df_to_fasta(_tl_result_df)
+        _tl_fasta_str = convert_df_to_fasta(_tl_result_df, header_format=_export_fmt)
         st.download_button(
             label=T("export_timeline_fasta_btn", n=f"{len(_tl_result_df):,}"),
             data=_tl_fasta_str.encode("utf-8"),
@@ -307,13 +313,16 @@ st.caption(T("export_split_caption"))
 
 # Candidate split columns
 _SPLIT_FIELDS = {
-    T("obs_col_subtype"):  "subtype_clean",
-    T("obs_col_host"):     "host",
-    T("obs_col_segment"):  "segment",
-    T("obs_col_location"): "location",
-    T("obs_col_clade"):    "clade",
-    "Year":                "_year",
-    "Month":               "_month",
+    T("obs_col_subtype"):     "subtype_clean",
+    T("obs_col_host"):        "host",
+    T("obs_col_host_species"):"host_species",
+    T("obs_col_host_tier"):   "host_tier",
+    T("obs_col_segment"):     "segment",
+    T("obs_col_location"):    "location",
+    T("obs_col_clade"):       "clade",
+    T("obs_col_clade_l1"):    "clade_l1",
+    T("analytics_field_year"):  "_year",
+    T("analytics_field_month"): "_month",
 }
 # Keep only columns that actually exist
 _available_split = {
@@ -328,6 +337,8 @@ with sp1:
         options=list(_available_split.keys()),
         help=T("export_split_field_help"),
     )
+    if _available_split.get(split_label) == "host_tier":
+        render_host_tier_glossary()
 with sp2:
     split_source = st.radio(
         T("export_source_label"),
@@ -401,7 +412,7 @@ if "split_summary" in st.session_state:
                             .replace("?","_").replace('"','_')
                             .replace("<","_").replace(">","_"))
                     grp_clean = grp.drop(columns=["_split_key"])
-                    content   = convert_df_to_fasta(grp_clean)
+                    content   = convert_df_to_fasta(grp_clean, header_format=_export_fmt)
                     zf.writestr(
                         f"{st.session_state['split_label']}_{safe}.fasta",
                         content.encode("utf-8"),
@@ -433,7 +444,7 @@ if "split_summary" in st.session_state:
         _igrp    = groups_df[groups_df["_split_key"] == _ikey].drop(columns=["_split_key"])
         _in_g    = len(_igrp)
         _idisp   = str(_ikey)[:20] + "…" if len(str(_ikey)) > 20 else str(_ikey)
-        _ifasta  = convert_df_to_fasta(_igrp)
+        _ifasta  = convert_df_to_fasta(_igrp, header_format=_export_fmt)
         _igrp_fn = f"{_pfx}_{st.session_state['split_label']}_{_isafe}.fasta"
         _ind_cols[_ki % 4].download_button(
             label=f"📄 {_idisp}  ({_in_g})",
@@ -700,7 +711,7 @@ with st.expander(f"📁 {T('export_seg_folder_header')}", expanded=False):
                                 _seg_zf.writestr(f"{_seg}/{_nk_safe}/.gitkeep", "")
                                 continue
                             try:
-                                _nk_fasta = convert_df_to_fasta(_nk_rows)
+                                _nk_fasta = convert_df_to_fasta(_nk_rows, header_format=_export_fmt)
                                 _seg_zf.writestr(
                                     f"{_seg}/{_nk_safe}/{_seg_file_pfx}_{_seg}_{_nk_safe}.fasta",
                                     _nk_fasta if isinstance(_nk_fasta, bytes)
@@ -722,7 +733,7 @@ with st.expander(f"📁 {T('export_seg_folder_header')}", expanded=False):
                         _seg_subset = _get_seg_subset(_seg)
                         if not _seg_subset.empty:
                             try:
-                                _seg_fasta = convert_df_to_fasta(_seg_subset)
+                                _seg_fasta = convert_df_to_fasta(_seg_subset, header_format=_export_fmt)
                                 _seg_zf.writestr(
                                     f"{_seg}/{_seg_file_pfx}_{_seg}.fasta",
                                     _seg_fasta if isinstance(_seg_fasta, bytes)

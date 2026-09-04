@@ -17,6 +17,7 @@ import pandas as pd
 import streamlit as st
 
 from utils.minimal_i18n import T
+from utils.ui_helpers import render_host_tier_glossary, render_top_n_table
 
 # Pre-load logo as base64 for inline HTML embedding
 try:
@@ -538,50 +539,59 @@ col_sub, col_host, col_seg = st.columns(3)
 
 with col_sub:
     st.subheader(T("obs_top_subtypes"))
-    if "subtype_clean" in _display_df.columns:
-        _vc = _display_df["subtype_clean"].value_counts().head(8)
-        top = pd.DataFrame({T("obs_col_subtype"): _vc.index.tolist(),
-                            T("obs_col_count"):   _vc.values.tolist()})
-        st.dataframe(top, use_container_width=True, hide_index=True)
+    render_top_n_table(_display_df, "subtype_clean", T("obs_col_subtype"), key_prefix="obs_row3")
 
 with col_host:
     st.subheader(T("obs_top_hosts"))
-    if "host" in _display_df.columns:
-        _vc = _display_df["host"].value_counts().head(8)
-        top = pd.DataFrame({T("obs_col_host"):  _vc.index.tolist(),
-                            T("obs_col_count"): _vc.values.tolist()})
-        st.dataframe(top, use_container_width=True, hide_index=True)
+    # Drills into host_species so e.g. "Avian: 92" expands into its
+    # duck/chicken/mallard/... breakdown, using the now-canonicalized
+    # host_species values (mallard / Mallard_Duck / Mallard all merged).
+    render_top_n_table(
+        _display_df, "host", T("obs_col_host"),
+        drilldown_column="host_species" if "host_species" in _display_df.columns else None,
+        key_prefix="obs_row3",
+    )
 
 with col_seg:
     st.subheader(T("obs_top_segments"))
-    if "segment" in _display_df.columns:
-        _vc = _display_df["segment"].value_counts().head(8)
-        top = pd.DataFrame({T("obs_col_segment"): _vc.index.tolist(),
-                            T("obs_col_count"):    _vc.values.tolist()})
-        st.dataframe(top, use_container_width=True, hide_index=True)
+    render_top_n_table(_display_df, "segment", T("obs_col_segment"), key_prefix="obs_row3")
 
 # ── Row 4: Top [any field] bar chart (user-selectable) ───────────────────────
 if _show_locs:
     st.divider()
     # Build map of available categorical columns in priority order
     _loc_field_map = {k: v for k, v in [
-        (T("obs_col_location"),  "location"),
-        (T("obs_col_host"),      "host"),
-        (T("obs_col_subtype"),   "subtype_clean"),
-        (T("obs_col_segment"),   "segment"),
-        (T("obs_col_clade_l1"),  "clade_l1"),
-        (T("obs_col_clade"),     "clade"),
+        (T("obs_col_location"),     "location"),
+        (T("obs_col_host"),         "host"),
+        (T("obs_col_host_species"), "host_species"),
+        (T("obs_col_host_tier"),    "host_tier"),
+        (T("obs_col_subtype"),      "subtype_clean"),
+        (T("obs_col_segment"),      "segment"),
+        (T("obs_col_clade_l1"),     "clade_l1"),
+        (T("obs_col_clade"),        "clade"),
     ] if v in _display_df.columns and _display_df[v].notna().any()}
 
     _OBS_BAR_PALETTES = {
-        T("obs_palette_teal"):    "Teal",
-        T("obs_palette_viridis"): "Viridis",
-        T("obs_palette_plasma"):  "Plasma",
-        T("obs_palette_blues"):   "Blues",
-        T("obs_palette_greens"):  "Greens",
-        T("obs_palette_reds"):    "Reds",
-        T("obs_palette_sunset"):  "RdBu",
-        T("obs_palette_orange"):  "Oranges",
+        T("obs_palette_teal"):     "Teal",
+        T("obs_palette_viridis"):  "Viridis",
+        T("obs_palette_plasma"):   "Plasma",
+        T("obs_palette_blues"):    "Blues",
+        T("obs_palette_greens"):   "Greens",
+        T("obs_palette_reds"):     "Reds",
+        T("obs_palette_sunset"):   "RdBu",
+        T("obs_palette_orange"):   "Oranges",
+        T("obs_palette_cividis"):  "Cividis",
+        T("obs_palette_turbo"):    "Turbo",
+        T("obs_palette_inferno"):  "Inferno",
+        T("obs_palette_magma"):    "Magma",
+        T("obs_palette_electric"): "Electric",
+        T("obs_palette_hot"):      "Hot",
+        T("obs_palette_portland"): "Portland",
+        T("obs_palette_purples"):  "Purples",
+        T("obs_palette_ylorrd"):   "YlOrRd",
+        T("obs_palette_ylgnbu"):   "YlGnBu",
+        T("obs_palette_rainbow"):  "Rainbow",
+        T("obs_palette_mint"):     "Mint",
     }
     _lf_hdr_col, _lf_ctrl_col, _lf_pal_col = st.columns([3, 1, 1])
     with _lf_ctrl_col:
@@ -622,6 +632,9 @@ if _show_locs:
         except ImportError:
             st.dataframe(top_loc, use_container_width=True, hide_index=True)
 
+    if _lf_col == "host_tier":
+        render_host_tier_glossary()
+
 # ── Row 5: Donut chart — user-selectable field ───────────────────────────────
 _donut_field_map = {k: v for k, v in [
     (T("obs_col_clade"),         "clade"),
@@ -629,6 +642,7 @@ _donut_field_map = {k: v for k, v in [
     (T("obs_col_subtype"),       "subtype_clean"),
     (T("obs_col_host"),          "host"),
     (T("obs_col_host_species"),  "host_species"),
+    (T("obs_col_host_tier"),     "host_tier"),
     (T("obs_col_segment"),       "segment"),
     (T("obs_col_location"),      "location"),
 ] if v in _display_df.columns and _display_df[v].notna().any()}
@@ -645,6 +659,9 @@ if _show_clades and _donut_field_map:
     _dnt_col = _donut_field_map.get(_dnt_lbl, "clade")
     with _dnt_hdr_col:
         st.subheader(T("obs_top_dist_header", field=_dnt_lbl))
+
+    if _dnt_col in ("clade", "clade_l1") and "unassigned" in _display_df[_dnt_col].astype(str).values:
+        st.caption(T("obs_clade_unassigned_note"))
 
     _vc_donut = _display_df[_dnt_col].dropna().value_counts().head(12)
     top_donut = pd.DataFrame({_dnt_lbl: _vc_donut.index.tolist(),
@@ -677,6 +694,7 @@ if _show_new_charts and _PLOTLY:
     _ADV_CAT = {k: v for k, v in [
         (T("obs_col_host"),         "host"),
         (T("obs_col_host_species"), "host_species"),
+        (T("obs_col_host_tier"),    "host_tier"),
         (T("obs_col_subtype"),      "subtype_clean"),
         (T("obs_col_segment"),      "segment"),
         (T("obs_col_clade"),        "clade"),
@@ -699,14 +717,14 @@ if _show_new_charts and _PLOTLY:
         T("obs_3d_tab"),
     ])
 
-    # ── Tab 1: Sankey — configurable N-level flow (up to 5 levels) ────────────
+    # ── Tab 1: Sankey — configurable N-level flow (up to 7 levels) ────────────
     with _nc_tab1:
         st.caption(T("obs_sankey_cue"))
         _none_opt = T("obs_none_option")
         _opt_required = _ADV_CAT_LBLS
         _opt_optional = [_none_opt] + _ADV_CAT_LBLS
 
-        # ── Level selectors (5 slots; levels 1-2 required, 3-5 optional) ─────
+        # ── Level selectors (7 slots; levels 1-2 required, 3-7 optional) ─────
         _s_def1 = _ADV_CAT_LBLS.index(T("obs_col_host")) if T("obs_col_host") in _ADV_CAT_LBLS else 0
         _s_def2 = (_ADV_CAT_LBLS.index(T("obs_col_subtype"))
                    if T("obs_col_subtype") in _ADV_CAT_LBLS else min(1, len(_ADV_CAT_LBLS) - 1))
@@ -716,7 +734,7 @@ if _show_new_charts and _PLOTLY:
              if v in (T("obs_col_clade"), T("obs_col_clade_l1"))),
             0,
         )
-        _san_lv_cols = st.columns(5)
+        _san_lv_cols = st.columns(7)
         with _san_lv_cols[0]:
             _san_l1 = st.selectbox(T("obs_sankey_level1"), _opt_required,
                                    index=_s_def1, key="adv_san_f1")
@@ -732,6 +750,12 @@ if _show_new_charts and _PLOTLY:
         with _san_lv_cols[4]:
             _san_l5 = st.selectbox(T("obs_sankey_level5"), _opt_optional,
                                    index=0, key="adv_san_f5")
+        with _san_lv_cols[5]:
+            _san_l6 = st.selectbox(T("obs_sankey_level6"), _opt_optional,
+                                   index=0, key="adv_san_f6")
+        with _san_lv_cols[6]:
+            _san_l7 = st.selectbox(T("obs_sankey_level7"), _opt_optional,
+                                   index=0, key="adv_san_f7")
 
         # ── Row 2: top-N slider, colour palette, title ────────────────────────
         _san_row2 = st.columns([1, 2, 3])
@@ -740,10 +764,14 @@ if _show_new_charts and _PLOTLY:
                                    max_value=20, value=8, key="adv_san_top_n")
         with _san_row2[1]:
             _SAN_PALETTES = {
-                T("obs_san_pal_teal"):   ["#0891b2", "#10b981", "#8b5cf6", "#f59e0b", "#ef4444"],
-                T("obs_san_pal_ocean"):  ["#1e40af", "#2563eb", "#3b82f6", "#60a5fa", "#93c5fd"],
-                T("obs_san_pal_sunset"): ["#dc2626", "#ea580c", "#d97706", "#ca8a04", "#65a30d"],
-                T("obs_san_pal_mono"):   ["#1e293b", "#334155", "#475569", "#64748b", "#94a3b8"],
+                T("obs_san_pal_teal"):     ["#0891b2", "#10b981", "#8b5cf6", "#f59e0b", "#ef4444", "#ec4899", "#64748b"],
+                T("obs_san_pal_ocean"):    ["#0c4a6e", "#1e40af", "#2563eb", "#3b82f6", "#60a5fa", "#93c5fd", "#7dd3fc"],
+                T("obs_san_pal_sunset"):   ["#dc2626", "#ea580c", "#d97706", "#ca8a04", "#65a30d", "#facc15", "#92400e"],
+                T("obs_san_pal_mono"):     ["#0f172a", "#1e293b", "#334155", "#475569", "#64748b", "#94a3b8", "#cbd5e1"],
+                T("obs_san_pal_forest"):   ["#14532d", "#166534", "#15803d", "#16a34a", "#22c55e", "#4ade80", "#86efac"],
+                T("obs_san_pal_berry"):    ["#581c87", "#7e22ce", "#a21caf", "#c026d3", "#d946ef", "#e879f9", "#f0abfc"],
+                T("obs_san_pal_amber"):    ["#78350f", "#92400e", "#b45309", "#d97706", "#f59e0b", "#fbbf24", "#fde047"],
+                T("obs_san_pal_spectrum"): ["#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#3b82f6", "#8b5cf6"],
             }
             _san_pal_name = st.selectbox(T("obs_sankey_palette"),
                                          list(_SAN_PALETTES.keys()), key="adv_san_pal")
@@ -758,7 +786,8 @@ if _show_new_charts and _PLOTLY:
             return _ADV_CAT.get(lbl) if lbl and lbl != _none_opt else None
 
         _san_level_cols = [c for c in
-                           [_san_resolve(l) for l in [_san_l1, _san_l2, _san_l3, _san_l4, _san_l5]]
+                           [_san_resolve(l) for l in
+                            [_san_l1, _san_l2, _san_l3, _san_l4, _san_l5, _san_l6, _san_l7]]
                            if c]
 
         if len(set(_san_level_cols)) < len(_san_level_cols):
@@ -848,6 +877,28 @@ if _show_new_charts and _PLOTLY:
                         margin=dict(t=40, b=20, l=10, r=10),
                         font=dict(size=11, color="#1e293b"),
                     )
+                    # ── Legend: color = level, since node color encodes which ──
+                    # level a value belongs to, not the value itself, and the
+                    # level→field mapping is user-chosen each render.
+                    _adv_col_to_label = {v: k for k, v in _ADV_CAT.items()}
+                    _san_legend_items = [
+                        f'<span style="display:inline-flex;align-items:center;margin-right:16px;">'
+                        f'<span style="width:11px;height:11px;border-radius:3px;'
+                        f'background:{_san_pal[_li % len(_san_pal)]};display:inline-block;'
+                        f'margin-right:5px;border:1px solid rgba(0,0,0,0.15);"></span>'
+                        f'<span style="font-size:12.5px;color:#334155;">'
+                        f'{_li + 1}. {_adv_col_to_label.get(_col, _col)}</span></span>'
+                        for _li, _col in enumerate(_san_available)
+                    ]
+                    st.markdown(
+                        f'<div style="display:flex;flex-wrap:wrap;align-items:center;'
+                        f'margin:2px 0 8px 2px;">'
+                        f'<span style="font-size:12.5px;color:#64748b;margin-right:10px;">'
+                        f'{T("obs_sankey_legend_label")}</span>'
+                        f'{"".join(_san_legend_items)}</div>',
+                        unsafe_allow_html=True,
+                    )
+
                     st.plotly_chart(_san_fig, use_container_width=True)
 
                     # ── Download row ──────────────────────────────────────────

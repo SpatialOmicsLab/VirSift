@@ -26,6 +26,7 @@ import pandas as pd
 import streamlit as st
 
 from utils.minimal_i18n import T
+from utils.ui_helpers import render_host_tier_glossary
 
 # ─────────────────────────────────────────────────────────────────────────────
 # State — respect global Data Mode toggle (sidebar)
@@ -144,6 +145,7 @@ _tl_scope_dims = [
     ("subtype_clean", T("analytics_subtype_scope_label"),  "🧬", "tl_sub_scope"),
     ("host",          T("analytics_host_scope_label"),     "🐦", "tl_host_scope"),
     ("host_species",  T("analytics_host_species_label"),   "🦆", "tl_host_sp_scope"),
+    ("host_tier",     T("analytics_host_tier_scope_label"), "🛡️", "tl_host_tier_scope"),
     ("location",      T("analytics_location_scope_label"), "📍", "tl_loc_scope"),
     ("clade_l1",      T("analytics_clade_scope_label"),    "🌿", "tl_clade_scope"),
 ]
@@ -176,6 +178,8 @@ if _tl_active_dims:
                 )
     if _tl_scope_labels:
         st.caption(f"**{T('analytics_scope_active_badge')}:** {' · '.join(_tl_scope_labels)}")
+    if any(col == "host_tier" for col, *_ in _tl_active_dims):
+        render_host_tier_glossary()
     st.divider()
 
 # ── Mission statement ─────────────────────────────────────────────────────────

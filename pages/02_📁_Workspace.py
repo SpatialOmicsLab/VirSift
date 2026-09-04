@@ -14,6 +14,7 @@ import streamlit as st
 
 from utils.gisaid_parser import decompress_if_needed, parse_gisaid_fasta
 from utils.minimal_i18n import T
+from utils.ui_helpers import render_host_tier_glossary, render_top_n_table
 
 # Size thresholds (bytes)
 _WARN_BYTES = 50 * 1024 * 1024   # 50 MB  — soft warning, still processes
@@ -283,6 +284,7 @@ if not active_df.empty:
         ("segment",       T("workspace_top_segments"),       "🧩"),
         ("location",      T("workspace_top_locations"),      "📍"),
         ("host_species",  T("workspace_top_host_species"),   "🦆"),
+        ("host_tier",     T("workspace_top_host_tier"),       "🛡️"),
         ("clade_l1",      T("workspace_top_clades"),         "🌿"),
     ]
     _ws_panels = [
@@ -301,17 +303,14 @@ if not active_df.empty:
             _pcols = st.columns(len(_row_pair))
             for _ci, (_field, _label, _icon) in enumerate(_row_pair):
                 with _pcols[_ci]:
-                    _vc = (
-                        active_df[_field]
-                        .replace("Unknown", pd.NA)
-                        .dropna()
-                        .value_counts()
-                        .head(5)
-                        .reset_index()
-                    )
-                    _vc.columns = [_label, T("workspace_count")]
                     st.markdown(f"**{_icon} {_label}**")
-                    st.dataframe(_vc, use_container_width=True, hide_index=True)
+                    render_top_n_table(
+                        active_df, _field, _label, default_n=5,
+                        drilldown_column="host_species" if _field == "host_tier" else None,
+                        key_prefix="ws_panel",
+                    )
+        if any(col == "host_tier" for col, *_ in _ws_panels):
+            render_host_tier_glossary()
 
     if len(active_df) > 10_000:
         st.warning(T("sidebar_large_dataset_warning"))

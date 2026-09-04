@@ -33,6 +33,7 @@ import streamlit as st
 
 from utils.minimal_i18n import T
 from utils.peak_detector import EpiWaveDetector
+from utils.ui_helpers import humanize_field, render_host_tier_glossary
 
 try:
     import plotly.express as px
@@ -104,7 +105,9 @@ _an_scope_dims = [
     ("subtype_clean", T("analytics_subtype_scope_label"),  "🧬", "an_sub_scope"),
     ("host",          T("analytics_host_scope_label"),     "🐦", "an_host_scope"),
     ("host_species",  T("analytics_host_species_label"),   "🦆", "an_host_sp_scope"),
+    ("host_tier",     T("analytics_host_tier_scope_label"), "🛡️", "an_host_tier_scope"),
     ("location",      T("analytics_location_scope_label"), "📍", "an_loc_scope"),
+    ("clade",         T("analytics_clade_full_scope_label"), "🍃", "an_clade_full_scope"),
     ("clade_l1",      T("analytics_clade_scope_label"),    "🌿", "an_clade_scope"),
 ]
 # Only show dimensions that have ≥2 meaningful unique values
@@ -136,6 +139,8 @@ if _an_active_dims:
     if _an_scope_labels:
         _src = " · ".join(_an_scope_labels)
         st.caption(f"**{T('analytics_scope_active_badge')}:** {_src}")
+    if any(col == "host_tier" for col, *_ in _an_active_dims):
+        render_host_tier_glossary()
     st.divider()
 
 st.caption(T("analytics_dataset_label", n=f"{len(_df):,}", src=_src))
@@ -260,14 +265,16 @@ def _scheme_disp(name: str) -> str:
 
 
 _FIELD_MAP = {
-    T("analytics_field_subtype"):   "subtype_clean",
-    T("analytics_field_host"):      "host",
-    T("analytics_field_segment"):   "segment",
-    T("analytics_field_location"):  "location",
-    T("analytics_field_clade"):     "clade",
-    T("analytics_field_clade_l1"):  "clade_l1",       # Broad clade grouping (L1 only)
-    T("analytics_field_year"):      "_year",
-    T("analytics_field_clone"):     "sequence_clone",  # Post-Timeline curated clone name
+    T("analytics_field_subtype"):     "subtype_clean",
+    T("analytics_field_host"):        "host",
+    T("analytics_field_host_species"):"host_species",
+    T("analytics_field_host_tier"):   "host_tier",
+    T("analytics_field_segment"):     "segment",
+    T("analytics_field_location"):    "location",
+    T("analytics_field_clade"):       "clade",
+    T("analytics_field_clade_l1"):    "clade_l1",       # Broad clade grouping (L1 only)
+    T("analytics_field_year"):        "_year",
+    T("analytics_field_clone"):       "sequence_clone",  # Post-Timeline curated clone name
 }
 
 _CHART_TYPES = {
@@ -284,18 +291,24 @@ _CHART_TYPES = {
     T("analytics_chart_type_gantt"):    "gantt",
 }
 
-# Human-readable display names for raw column names
+# Human-readable display names for raw column names. Every chart that shows
+# a field name as an axis/legend title MUST go through _COL_LABELS.get(field,
+# humanize_field(field)) — never field alone — so an unlisted or newly added
+# column never leaks into the UI as a raw snake_case/underscore-prefixed name.
 _COL_LABELS: dict = {
-    "clade":          T("analytics_field_clade"),
-    "subtype_clean":  T("analytics_field_subtype"),
-    "host":           T("analytics_field_host"),
-    "segment":        T("analytics_field_segment"),
-    "location":       T("analytics_field_location"),
-    "clade_l1":       T("analytics_field_clade_l1"),
-    "_year":          T("analytics_field_year"),
-    "sequence_clone": T("analytics_field_clone"),
-    "isolate":        "Isolate",
-    "collection_date": "Collection Date",
+    "clade":            T("analytics_field_clade"),
+    "subtype_clean":    T("analytics_field_subtype"),
+    "host":             T("analytics_field_host"),
+    "host_species":     T("analytics_field_host_species"),
+    "host_tier":        T("analytics_field_host_tier"),
+    "segment":          T("analytics_field_segment"),
+    "location":         T("analytics_field_location"),
+    "clade_l1":         T("analytics_field_clade_l1"),
+    "_year":            T("analytics_field_year"),
+    "_month":           T("analytics_field_month"),
+    "sequence_clone":   T("analytics_field_clone"),
+    "isolate":          T("filter_field_isolate"),
+    "collection_date":  T("filter_field_collection_date"),
 }
 
 _INTERVALS = {
@@ -543,10 +556,10 @@ def _make_stacked(df: pd.DataFrame, cat1_field: str, cat2_field: str,
                  category_orders={cat1_field: top_cats.tolist()})
     fig.update_traces(textfont_size=10, textangle=0,
                       textposition="inside", cliponaxis=False)
-    fig.update_xaxes(tickangle=40, title=_COL_LABELS.get(cat1_field, cat1_field))
+    fig.update_xaxes(tickangle=40, title=_COL_LABELS.get(cat1_field, humanize_field(cat1_field)))
     fig.update_yaxes(title=T("obs_col_count"))
     fig.update_layout(**_LAYOUT,
-                      legend_title=_COL_LABELS.get(cat2_field, cat2_field))
+                      legend_title=_COL_LABELS.get(cat2_field, humanize_field(cat2_field)))
     return fig
 
 
@@ -690,7 +703,7 @@ def _make_violin(df: pd.DataFrame, group_col: str, scheme) -> go.Figure:
         **_LAYOUT, height=500,
         violinmode="overlay",
         yaxis_title="Sequence Length (bp)",
-        xaxis_title=_COL_LABELS.get(group_col, group_col) if group_col in df.columns else "",
+        xaxis_title=_COL_LABELS.get(group_col, humanize_field(group_col)) if group_col in df.columns else "",
     )
     return fig
 
@@ -726,7 +739,7 @@ def _make_bubble(df: pd.DataFrame, interval_code: str,
     fig.update_traces(textposition="middle center",
                       textfont=dict(size=9, color="white"))
     fig.update_xaxes(title=T("analytics_period_label"), tickangle=45)
-    fig.update_yaxes(title=_COL_LABELS.get(y_field, y_field))
+    fig.update_yaxes(title=_COL_LABELS.get(y_field, humanize_field(y_field)))
     fig.update_layout(**_LAYOUT, height=520, showlegend=False)
     return fig
 
@@ -782,7 +795,7 @@ def _make_gantt(df: pd.DataFrame, top_n: int, scheme, y_field: str = "subtype_cl
     agg.loc[same_day, "Finish"] = agg.loc[same_day, "Finish"] + pd.Timedelta(days=1)
 
     colors = scheme if isinstance(scheme, list) else None
-    y_label = _COL_LABELS.get(y_field, y_field)
+    y_label = _COL_LABELS.get(y_field, humanize_field(y_field))
 
     fig = px.timeline(agg, x_start="Start", x_end="Finish", y=y_field,
                       color=y_field, color_discrete_sequence=colors,
@@ -808,10 +821,10 @@ def _make_heatmap(df: pd.DataFrame, field: str, top_n: int, scheme) -> go.Figure
         return _empty_fig(T("analytics_no_data"))
 
     data_df = pd.DataFrame({
-        _COL_LABELS.get(field, field): counts.index,
+        _COL_LABELS.get(field, humanize_field(field)): counts.index,
         T("obs_col_count"): counts.values,
     })
-    col_name = _COL_LABELS.get(field, field)
+    col_name = _COL_LABELS.get(field, humanize_field(field))
     count_name = T("obs_col_count")
 
     # Color scale: use first entry if list, or the whole value if string
@@ -960,7 +973,7 @@ with ctrl_col:
         all_cat_fields = [v for v in _par_candidates if v in _df_enriched.columns]
         default_dims = all_cat_fields[:3]
         # Show human-readable labels in the multiselect
-        _par_label_to_col = {_COL_LABELS.get(v, v): v for v in all_cat_fields}
+        _par_label_to_col = {_COL_LABELS.get(v, humanize_field(v)): v for v in all_cat_fields}
         _par_col_to_label = {v: k for k, v in _par_label_to_col.items()}
         _par_default_labels = [_par_col_to_label.get(c, c) for c in default_dims]
         pc_labels = st.multiselect(
