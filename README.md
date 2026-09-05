@@ -46,11 +46,11 @@ It is designed for virologists, surveillance laboratories, bioinformaticians, ep
 - Infer host, normalize species names, extract clade and segment metadata, and calculate MD5 hashes.
 - Preserve an immutable pre-filter dataset alongside a mutable curated dataset.
 - Apply sequence-quality, metadata, accession, and deduplication filters.
-- Run five human-in-the-loop temporal sampling strategies.
+- Run six human-in-the-loop temporal sampling strategies.
 - Generate epidemiological, temporal, categorical, and hierarchical visualizations.
 - Track molecular clone persistence through a dedicated timeline workflow.
 - Export curated data as FASTA, CSV, JSON, session logs, accession lists, and segment-organized ZIP bundles.
-- Provide six structurally aligned language catalogues containing 817 keys each.
+- Provide six structurally aligned language catalogues containing 921 keys each.
 
 ---
 
@@ -113,7 +113,7 @@ Preparing viral sequence datasets often involves a mixture of scripts, spreadshe
 | 📊 **Observatory** | Presents KPI summaries, temporal curves, composition views, and Sankey flows. |
 | 📈 **Analytics** | Provides ten visualization types, including Sunburst, Treemap, temporal charts, distributions, and monthly heatmaps. |
 | 🕒 **Molecular Timeline** | Supports diagnostics, persistence matrices, and Gantt-style clone-persistence timelines. |
-| 🌍 **Internationalization** | Uses 817 keys across EN, RU, FR, ES, AR, and ZH, with English fallback where needed. |
+| 🌍 **Internationalization** | Uses 921 keys across EN, RU, FR, ES, AR, and ZH, with English fallback where needed. |
 | 📦 **Export** | Produces FASTA, metadata CSV, JSON, session logs, accession lists, and segment-organized ZIP bundles. |
 
 ---
@@ -222,7 +222,7 @@ The visualization layer includes:
 - Sunburst charts
 - Treemaps
 - Gantt timelines
-- Sankey flows with up to five levels
+- Sankey flows with up to seven levels
 - Temporal sequence-record curves
 - Host distributions
 - Subtype distributions
@@ -247,7 +247,7 @@ The Molecular Timeline module provides a four-phase workflow for examining molec
 
 ## Multilingual Architecture
 
-Each language catalogue contains the same **817 keys**:
+Each language catalogue contains the same **921 keys**:
 
 - English (`EN`)
 - Russian (`RU`)
