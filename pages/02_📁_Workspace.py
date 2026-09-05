@@ -41,7 +41,7 @@ st.caption(T("upload_instruction"))
 
 uploaded_files = st.file_uploader(
     label=T("upload_instruction"),
-    type=["fasta", "fa", "fas", "fna", "txt", "gz", "zip", "aln-fasta"],
+    type=["fasta", "fa", "fas", "fna", "txt", "gz", "zip", "aln-fasta", "aln"],
     accept_multiple_files=True,
     key="file_uploader",
     label_visibility="collapsed",
@@ -153,17 +153,34 @@ else:
         n_sub = mini["subtype_clean"].nunique() if "subtype_clean" in mini.columns else "—"
         # Unique segments
         n_seg = mini["segment"].nunique() if "segment" in mini.columns else "—"
+        # Alignment gaps — at least one sequence kept "-" characters from
+        # .aln-fasta/.aln input (see utils/gisaid_parser._finalize_record)
+        has_gaps = (
+            "aligned_sequence" in mini.columns
+            and mini["aligned_sequence"].fillna("").str.contains("-", regex=False).any()
+        )
         return {
             "File":                       rf["name"],
             T("sidebar_active_seqs"):     f"{n:,}",
             T("workspace_file_subtypes"): n_sub,
             T("workspace_file_segments"): n_seg,
+            T("workspace_file_aligned"):  "✓" if has_gaps else "—",
             T("workspace_file_date_range"): date_str,
             "Parse (s)":                  f"{rf['parse_time']:.2f}",
         }
 
     summary = pd.DataFrame([_file_row(rf) for rf in raw_files])
-    st.dataframe(summary, use_container_width=True, hide_index=True)
+    st.dataframe(
+        summary,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            T("workspace_file_aligned"): st.column_config.TextColumn(
+                T("workspace_file_aligned"),
+                help=T("workspace_file_aligned_help"),
+            ),
+        },
+    )
 
     file_names = [rf["name"] for rf in raw_files]
 

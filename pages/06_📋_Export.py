@@ -23,6 +23,26 @@ from utils.ui_helpers import render_host_tier_glossary
 
 st.title(f"\U0001f4cb {T('export_header')}")
 
+
+def _safe_fasta(df: pd.DataFrame, header_format: str, preserve_gaps: bool = False) -> str:
+    """convert_df_to_fasta() with a plain-text fallback.
+
+    The vectorized builder can raise on unexpected column dtypes (e.g. a
+    dependency-version mismatch on the hosting platform, or a merged
+    multi-file session with inconsistent metadata). Falling back to a
+    minimal per-row writer keeps the download working instead of taking
+    down the whole page.
+    """
+    try:
+        return convert_df_to_fasta(df, header_format=header_format, preserve_gaps=preserve_gaps)
+    except Exception:
+        _seq_col = "aligned_sequence" if (preserve_gaps and "aligned_sequence" in df.columns) else "sequence"
+        lines = []
+        for _, r in df.iterrows():
+            lines.append(f">{r.get('isolate', r.get('sequence_hash', 'seq'))}")
+            lines.append(str(r.get(_seq_col, "")))
+        return "\n".join(lines)
+
 _active_df:   pd.DataFrame = st.session_state.get("active_df",   pd.DataFrame())
 _filtered_df: pd.DataFrame = st.session_state.get("filtered_df", pd.DataFrame())
 
@@ -38,6 +58,11 @@ _src_label  = T("export_split_filtered") if not _filtered_df.empty else T("expor
 # download on this page. "gisaid6" (default) = isolate|subtype|segment|date|
 # accession|clade. "full9" = legacy v1.0 order, adds host|location.
 _export_fmt = st.session_state.get("export_header_format", "gisaid6")
+
+# Gap-preservation toggle, also set in the sidebar (app.py) — applies to
+# every FASTA download on this page, including Split & Export and Segment
+# Folders. Off (default) = de-gapped sequence, unchanged from before.
+_preserve_gaps = st.session_state.get("export_preserve_gaps", False)
 
 st.caption(
     f"**{T('export_source_label')}:** {_src_label} "
@@ -71,7 +96,7 @@ q1, q2, q3, q4 = st.columns(4)
 
 # — FASTA
 with q1:
-    fasta_str = convert_df_to_fasta(_export_df, header_format=_export_fmt)
+    fasta_str = _safe_fasta(_export_df, _export_fmt, _preserve_gaps)
     st.download_button(
         label=T("export_fasta_btn", n=f"{len(_export_df):,}"),
         data=fasta_str.encode("utf-8"),
@@ -176,14 +201,7 @@ if len(_contrib_ex) > 1:
         _pf_c0.markdown(f"**{_pf_label}** — {_pf_n:,} seqs")
 
         with _pf_c1:
-            try:
-                _pf_fasta = convert_df_to_fasta(_pf_df, header_format=_export_fmt)
-            except Exception:
-                _lines = []
-                for _, _r in _pf_df.iterrows():
-                    _lines.append(f">{_r.get('isolate', _r.get('sequence_hash', 'seq'))}")
-                    _lines.append(str(_r.get("sequence", "")))
-                _pf_fasta = "\n".join(_lines)
+            _pf_fasta = _safe_fasta(_pf_df, _export_fmt, _preserve_gaps)
             st.download_button(
                 label=T("export_per_file_fasta"),
                 data=_pf_fasta.encode("utf-8") if isinstance(_pf_fasta, str) else _pf_fasta,
@@ -224,14 +242,7 @@ if len(_contrib_ex) > 1:
                     for _zrf in _contrib_ex:
                         _z_df   = pd.DataFrame(_zrf["parsed"])
                         _z_safe = _re_ex.sub(r"[^\w\-]", "_", _zrf["name"])[:40]
-                        try:
-                            _z_fa = convert_df_to_fasta(_z_df, header_format=_export_fmt)
-                        except Exception:
-                            _zl = []
-                            for _, _r in _z_df.iterrows():
-                                _zl.append(f">{_r.get('isolate', 'seq')}")
-                                _zl.append(str(_r.get("sequence", "")))
-                            _z_fa = "\n".join(_zl)
+                        _z_fa = _safe_fasta(_z_df, _export_fmt, _preserve_gaps)
                         _pf_zf.writestr(
                             f"{_pfx}_{_z_safe}.fasta",
                             _z_fa.encode("utf-8") if isinstance(_z_fa, str) else _z_fa,
@@ -262,7 +273,7 @@ if _tl_result_df is not None and not _tl_result_df.empty:
     _tl_q1, _tl_q2, _tl_q3 = st.columns(3)
 
     with _tl_q1:
-        _tl_fasta_str = convert_df_to_fasta(_tl_result_df, header_format=_export_fmt)
+        _tl_fasta_str = _safe_fasta(_tl_result_df, _export_fmt, _preserve_gaps)
         st.download_button(
             label=T("export_timeline_fasta_btn", n=f"{len(_tl_result_df):,}"),
             data=_tl_fasta_str.encode("utf-8"),
@@ -412,7 +423,7 @@ if "split_summary" in st.session_state:
                             .replace("?","_").replace('"','_')
                             .replace("<","_").replace(">","_"))
                     grp_clean = grp.drop(columns=["_split_key"])
-                    content   = convert_df_to_fasta(grp_clean, header_format=_export_fmt)
+                    content   = _safe_fasta(grp_clean, _export_fmt, _preserve_gaps)
                     zf.writestr(
                         f"{st.session_state['split_label']}_{safe}.fasta",
                         content.encode("utf-8"),
@@ -444,7 +455,7 @@ if "split_summary" in st.session_state:
         _igrp    = groups_df[groups_df["_split_key"] == _ikey].drop(columns=["_split_key"])
         _in_g    = len(_igrp)
         _idisp   = str(_ikey)[:20] + "…" if len(str(_ikey)) > 20 else str(_ikey)
-        _ifasta  = convert_df_to_fasta(_igrp, header_format=_export_fmt)
+        _ifasta  = _safe_fasta(_igrp, _export_fmt, _preserve_gaps)
         _igrp_fn = f"{_pfx}_{st.session_state['split_label']}_{_isafe}.fasta"
         _ind_cols[_ki % 4].download_button(
             label=f"📄 {_idisp}  ({_in_g})",
@@ -711,7 +722,7 @@ with st.expander(f"📁 {T('export_seg_folder_header')}", expanded=False):
                                 _seg_zf.writestr(f"{_seg}/{_nk_safe}/.gitkeep", "")
                                 continue
                             try:
-                                _nk_fasta = convert_df_to_fasta(_nk_rows, header_format=_export_fmt)
+                                _nk_fasta = _safe_fasta(_nk_rows, _export_fmt, _preserve_gaps)
                                 _seg_zf.writestr(
                                     f"{_seg}/{_nk_safe}/{_seg_file_pfx}_{_seg}_{_nk_safe}.fasta",
                                     _nk_fasta if isinstance(_nk_fasta, bytes)
@@ -733,7 +744,7 @@ with st.expander(f"📁 {T('export_seg_folder_header')}", expanded=False):
                         _seg_subset = _get_seg_subset(_seg)
                         if not _seg_subset.empty:
                             try:
-                                _seg_fasta = convert_df_to_fasta(_seg_subset, header_format=_export_fmt)
+                                _seg_fasta = _safe_fasta(_seg_subset, _export_fmt, _preserve_gaps)
                                 _seg_zf.writestr(
                                     f"{_seg}/{_seg_file_pfx}_{_seg}.fasta",
                                     _seg_fasta if isinstance(_seg_fasta, bytes)
