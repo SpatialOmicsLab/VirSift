@@ -37,7 +37,7 @@ Performance target: 10K sequences in < 5 seconds.
 # Increment whenever host-inference, location-extraction, field-order
 # detection, or normalization logic changes — forces @st.cache_data to
 # reparse all files (including already-uploaded ones in a running session).
-_PARSER_VERSION = "v1.0"
+_PARSER_VERSION = "v1.1"
 
 import gzip
 import hashlib
@@ -68,6 +68,27 @@ from utils.host_tier_classifier import classify_host_tier
 # Public API
 # ---------------------------------------------------------------------------
 
+def _finalize_record(header: str, seq_parts: list) -> dict:
+    """Build one record's metadata dict, keeping both a de-gapped and a
+    gap-preserved copy of the sequence.
+
+    `sequence` (de-gapped) is what length/hash/dedup/analytics always use —
+    unchanged from before. `aligned_sequence` additionally keeps any `-`
+    alignment gap characters from .aln-fasta/.aln (Clustal Omega MSA) input,
+    so FASTA export can optionally restore the original alignment via the
+    "Preserve alignment gaps" setting instead of losing it permanently.
+    """
+    raw = "".join(seq_parts).upper().replace(" ", "")
+    seq = raw.replace("-", "")
+    metadata = _parse_header(header)
+    metadata["original_header"] = header
+    metadata["sequence"] = seq
+    metadata["aligned_sequence"] = raw
+    metadata["sequence_length"] = len(seq)
+    metadata["sequence_hash"] = compute_sequence_hash(seq)
+    return metadata
+
+
 @st.cache_data(show_spinner=False)
 def parse_gisaid_fasta(file_content: str, file_name: str,
                        _version: str = _PARSER_VERSION) -> tuple:
@@ -89,7 +110,11 @@ def parse_gisaid_fasta(file_content: str, file_name: str,
             collection_date (pd.Timestamp|None), accession, clade,
             clade_l1..clade_l6 (str|None),
             host, location,
-            sequence (str, uppercased), sequence_length (int), sequence_hash (str)
+            sequence (str, uppercased, gap characters stripped),
+            aligned_sequence (str, uppercased, gap characters kept — same as
+                `sequence` for non-alignment input; used by convert_df_to_fasta
+                when preserve_gaps=True),
+            sequence_length (int, of the de-gapped sequence), sequence_hash (str)
     """
     sequences = []
     parsing_start = time.perf_counter()
@@ -104,15 +129,7 @@ def parse_gisaid_fasta(file_content: str, file_name: str,
         if line.startswith(">"):
             # Flush previous record
             if current_header is not None:
-                # Strip alignment gap characters (-) so .aln-fasta files
-                # (Clustal Omega MSA output) compute correct lengths and hashes.
-                seq = "".join(current_seq_parts).upper().replace(" ", "").replace("-", "")
-                metadata = _parse_header(current_header)
-                metadata["original_header"] = current_header
-                metadata["sequence"] = seq
-                metadata["sequence_length"] = len(seq)
-                metadata["sequence_hash"] = compute_sequence_hash(seq)
-                sequences.append(metadata)
+                sequences.append(_finalize_record(current_header, current_seq_parts))
             current_header = line[1:]
             current_seq_parts = []
         else:
@@ -120,13 +137,7 @@ def parse_gisaid_fasta(file_content: str, file_name: str,
 
     # Flush last record
     if current_header is not None:
-        seq = "".join(current_seq_parts).upper().replace(" ", "").replace("-", "")
-        metadata = _parse_header(current_header)
-        metadata["original_header"] = current_header
-        metadata["sequence"] = seq
-        metadata["sequence_length"] = len(seq)
-        metadata["sequence_hash"] = compute_sequence_hash(seq)
-        sequences.append(metadata)
+        sequences.append(_finalize_record(current_header, current_seq_parts))
 
     # Batch-vectorize date parsing — replaces 10K individual pd.to_datetime() calls
     # with a single Series operation for a ~4x throughput improvement.
@@ -157,7 +168,7 @@ def decompress_if_needed(raw_bytes: bytes, file_name: str) -> str:
             return gzip.decompress(raw_bytes).decode("utf-8", errors="replace")
         if name_lower.endswith(".zip"):
             with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
-                fasta_exts = (".fasta", ".fa", ".fas", ".fna", ".txt", ".aln-fasta")
+                fasta_exts = (".fasta", ".fa", ".fas", ".fna", ".txt", ".aln-fasta", ".aln")
                 # Filter: keep only FASTA-like members; skip macOS metadata and dotfiles
                 fasta_members = sorted([
                     m for m in zf.namelist()
@@ -194,7 +205,7 @@ def decompress_zip_to_files(raw_bytes: bytes) -> dict:
     result = {}
     try:
         with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
-            fasta_exts = (".fasta", ".fa", ".fas", ".fna", ".txt", ".aln-fasta")
+            fasta_exts = (".fasta", ".fa", ".fas", ".fna", ".txt", ".aln-fasta", ".aln")
             members = sorted([
                 m for m in zf.namelist()
                 if m.lower().endswith(fasta_exts)
@@ -575,7 +586,8 @@ def compute_sequence_hash(sequence: str) -> str:
     return hashlib.md5(sequence.upper().encode()).hexdigest()[:12]
 
 
-def convert_df_to_fasta(df: pd.DataFrame, header_format: str = "gisaid6") -> str:
+def convert_df_to_fasta(df: pd.DataFrame, header_format: str = "gisaid6",
+                        preserve_gaps: bool = False) -> str:
     """Convert a filtered DataFrame back to FASTA format string.
 
     Fully vectorized header construction — no iterrows.
@@ -587,6 +599,13 @@ def convert_df_to_fasta(df: pd.DataFrame, header_format: str = "gisaid6") -> str
                       accession|clade|host|location, so host/location survive
                       into the exported header text instead of staying only
                       in the DataFrame/CSV export.
+        preserve_gaps:
+            False (default, unchanged) — writes the de-gapped "sequence" column.
+            True — writes the "aligned_sequence" column instead, restoring any
+                   "-" alignment gaps captured from .aln-fasta/.aln source
+                   files. Falls back to "sequence" when that column isn't
+                   present (e.g. data that never went through an alignment
+                   file, or was uploaded before this option existed).
     """
     if df.empty:
         return ""
@@ -625,7 +644,17 @@ def convert_df_to_fasta(df: pd.DataFrame, header_format: str = "gisaid6") -> str
             + _col("accession") + "|"
             + _col("clade")
         )
-    sequences = _col("sequence", "")
+    if preserve_gaps and "aligned_sequence" in df.columns:
+        # A merged multi-file dataset can mix rows parsed before this field
+        # existed (older cached session data) with freshly parsed rows —
+        # fall back those individual rows to "sequence" rather than exporting
+        # a blank sequence for them.
+        sequences = df["aligned_sequence"]
+        if "sequence" in df.columns:
+            sequences = sequences.fillna(df["sequence"])
+        sequences = sequences.fillna("").astype(str)
+    else:
+        sequences = _col("sequence", "")
 
     # Vectorized interleave: ">{header}\n{seq}" per record, joined by \n
     return (headers + "\n" + sequences).str.cat(sep="\n")
