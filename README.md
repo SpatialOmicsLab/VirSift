@@ -178,6 +178,7 @@ VirSift accepts:
 .gz
 .fasta.gz
 .zip
+.aln
 .aln-fasta
 ```
 
@@ -203,13 +204,14 @@ The **Original (Pre-Filter) Dataset** remains unchanged after parsing. Filters o
 
 ## Human-in-the-Loop Temporal Sampling
 
-VirSift includes five sampling strategies:
+VirSift includes six sampling strategies:
 
 1. **Chronological Sentinel** — selects representative records across time.
 2. **Highest Volume Peaks** — prioritizes periods with the largest sequence volume.
 3. **Peak Checklist** — lets users confirm candidate sampling peaks.
 4. **Custom Checkpoints** — samples user-defined temporal positions.
 5. **Visual Lasso** — supports interactive chart-based selection.
+6. **Clade-Based Monthly Filter** — keeps first, last, or both sequences per clade monthly.
 
 ---
 
