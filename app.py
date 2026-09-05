@@ -693,6 +693,14 @@ def _render_sidebar() -> None:
             help=T("sidebar_export_fmt_help"),
         )
 
+        # --- Preserve alignment gaps (applies to every FASTA download, every page) ---
+        st.checkbox(
+            T("sidebar_export_gaps_label"),
+            value=st.session_state.get("export_preserve_gaps", False),
+            key="export_preserve_gaps",
+            help=T("sidebar_export_gaps_help"),
+        )
+
         # --- Quick Actions ---
         st.markdown(f"**{T('sidebar_quick_actions')}**")
 
@@ -703,6 +711,7 @@ def _render_sidebar() -> None:
                 _fasta_out = convert_df_to_fasta(
                     _filtered_df,
                     header_format=st.session_state.get("export_header_format", "gisaid6"),
+                    preserve_gaps=st.session_state.get("export_preserve_gaps", False),
                 )
                 _pfx = st.session_state.get("export_prefix", "virsift") or "virsift"
                 st.download_button(
